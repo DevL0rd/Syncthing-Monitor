@@ -92,14 +92,7 @@ restart_plasma_if_needed() {
         return 0
     fi
 
-    if command -v kquitapp6 >/dev/null 2>&1 && command -v kstart >/dev/null 2>&1; then
-        export QML_XHR_ALLOW_FILE_READ=1
-        kquitapp6 plasmashell
-        kstart plasmashell
-        return 0
-    fi
-
-    printf 'Warning: Plasma must be restarted before automatic discovery will work.\n' >&2
+    printf 'Warning: log out and back in before using automatic discovery; Plasma was not restarted because its managed user service is unavailable.\n' >&2
 }
 
 command -v kpackagetool6 >/dev/null 2>&1 || {
