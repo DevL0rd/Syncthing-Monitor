@@ -66,7 +66,10 @@ PlasmoidItem {
     property bool deviceStatsLoaded: false
     property bool offlineBaselineReady: false
     property var offlineStates: ({})
+    property var recentFailureNotifications: ({})
     property int clockTick: 0
+
+    readonly property int failureNotificationCooldownMs: 5 * 60 * 1000
 
     readonly property var remoteDevices: root.devices.filter(function(device) { return device.deviceID !== root.myId })
     readonly property int connectedDevices: root.countConnectedDevices()
@@ -882,8 +885,9 @@ PlasmoidItem {
                 break
             case "Failure":
                 root.pendingAttention = true
-                if (plasmoid.configuration.notifyErrors)
-                    root.sendNotification(i18n("Syncthing error"), data.error || data.message || i18n("Syncthing reported a failure."), true)
+                var failureMessage = root.failureMessage(data)
+                if (plasmoid.configuration.notifyErrors && root.shouldNotifyFailure(failureMessage))
+                    root.sendNotification(i18n("Syncthing error"), failureMessage, true)
                 break
             }
         }
@@ -972,6 +976,36 @@ PlasmoidItem {
             ? KNotifications.Notification.HighUrgency
             : KNotifications.Notification.NormalUrgency
         notification.sendEvent()
+    }
+
+    function failureMessage(data) {
+        if (typeof data === "string") {
+            var directMessage = data.trim()
+            if (directMessage !== "") return directMessage
+        }
+        if (data && typeof data === "object") {
+            var objectMessage = String(data.error || data.message || "").trim()
+            if (objectMessage !== "") return objectMessage
+        }
+        return i18n("Syncthing reported a failure.")
+    }
+
+    function shouldNotifyFailure(message) {
+        var now = Date.now()
+        var recent = ({})
+        var messageKey = "$" + message
+        for (var key in root.recentFailureNotifications) {
+            var notifiedAt = Number(root.recentFailureNotifications[key] || 0)
+            if (now - notifiedAt < root.failureNotificationCooldownMs)
+                recent[key] = notifiedAt
+        }
+        if (recent[messageKey] !== undefined) {
+            root.recentFailureNotifications = recent
+            return false
+        }
+        recent[messageKey] = now
+        root.recentFailureNotifications = recent
+        return true
     }
 
     function expandPath(path) {
