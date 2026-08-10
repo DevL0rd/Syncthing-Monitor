@@ -583,6 +583,8 @@ PlasmoidItem {
                 root.folderNeedItems = root.withEntry(root.folderNeedItems, id, [])
                 root.folderNeedLoading = root.withEntry(root.folderNeedLoading, id, false)
             }
+            if (root.expanded && root.openFolder === id && root.folderState(id) === "busy")
+                root.refreshFolderNeed(id)
             root.evaluateSyncState()
         })
     }
@@ -744,6 +746,14 @@ PlasmoidItem {
 
     function refreshStats() {
         root.api("GET", "/rest/stats/folder", function(data) { root.folderStats = data || ({}) })
+    }
+
+    function refreshAllData() {
+        root.refreshConfig()
+        root.refreshSystem()
+        root.refreshConnections()
+        root.refreshDeviceStats()
+        root.refreshAttention()
     }
 
     function pollEvents() {
@@ -1025,12 +1035,12 @@ PlasmoidItem {
     Component.onCompleted: root.connect()
     Component.onDestruction: if (root.eventRequest) root.eventRequest.abort()
     onExpandedChanged: {
-        if (!root.expanded || !root.reachable) return
-        root.refreshSystem()
-        root.refreshStats()
-        root.refreshDeviceStats()
-        root.refreshAttention()
-        root.refreshCompletion()
+        if (!root.expanded) return
+        if (root.baseUrl === "" || root.apiKey === "") {
+            root.connect()
+            return
+        }
+        root.refreshAllData()
     }
 
     Connections {
