@@ -50,7 +50,11 @@ cd Linux-Syncthing-Monitor
 ```
 
 Then open Plasma's **Add Widgets** menu and add **Syncthing Monitor** to a
-panel. Middle-clicking the panel icon requests a rescan of every folder.
+panel. The installer enables the Qt permission needed to discover Syncthing's
+local configuration and restarts Plasma once if the running session needs the
+new setting. This permission applies to Plasma's QML process and is retained
+when the widget is uninstalled because other widgets may also rely on it.
+Middle-clicking the panel icon requests a rescan of every folder.
 
 ## Uninstall
 
