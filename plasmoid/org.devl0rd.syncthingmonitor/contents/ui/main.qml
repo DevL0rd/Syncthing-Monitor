@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
+import org.kde.notification as KNotifications
 import org.kde.plasma.components as PlasmaComponents
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.plasmoid
@@ -29,8 +30,14 @@ PlasmoidItem {
     property var folderStatus: ({})
     property var folderErrors: ({})
     property var folderStats: ({})
+    property var folderNeedItems: ({})
+    property var folderNeedLoading: ({})
     property var deviceCompletion: ({})
     property var deviceConnections: ({})
+    property var deviceStats: ({})
+    property var systemErrors: []
+    property var pendingDevices: ({})
+    property var pendingFolderOffers: ({})
     property string myId: ""
     property string myName: ""
     property string versionText: ""
@@ -48,12 +55,29 @@ PlasmoidItem {
     property bool pendingConfig: false
     property bool pendingConnections: false
     property bool pendingCompletion: false
+    property bool pendingAttention: false
+    property bool pendingDeviceStats: false
+    property var pendingNeedFolders: ({})
+    property bool globalActionPending: false
+    property bool syncTrackingReady: false
+    property bool syncWasActive: false
+    property bool devicesLoaded: false
+    property bool connectionsLoaded: false
+    property bool deviceStatsLoaded: false
+    property bool offlineBaselineReady: false
+    property var offlineStates: ({})
+    property int clockTick: 0
 
     readonly property var remoteDevices: root.devices.filter(function(device) { return device.deviceID !== root.myId })
     readonly property int connectedDevices: root.countConnectedDevices()
     readonly property int errorFolders: root.countFolders("error")
     readonly property int busyFolders: root.countFolders("busy")
     readonly property int pausedFolders: root.countFolders("paused")
+    readonly property bool allDevicesPaused: root.remoteDevices.length > 0
+        && root.countPausedDevices() === root.remoteDevices.length
+    readonly property int overdueDevices: root.countOverdueDevices()
+    readonly property var attentionItems: root.buildAttentionItems()
+    readonly property int attentionCount: root.attentionItems.length
     readonly property real totalGlobalBytes: root.sumStatus("globalBytes")
     readonly property real totalLocalBytes: root.sumStatus("localBytes")
     readonly property real totalNeedBytes: root.sumStatus("needBytes")
@@ -66,10 +90,11 @@ PlasmoidItem {
     readonly property string overallState:
           root.setupError !== "" ? "setup"
         : !root.reachable ? "offline"
-        : root.errorFolders > 0 ? "error"
+        : root.attentionCount > 0 ? "error"
         : root.busyFolders > 0 ? "syncing"
+        : root.overdueDevices > 0 ? "stale"
         : root.folders.length === 0 ? "empty"
-        : root.pausedFolders === root.folders.length ? "paused"
+        : root.pausedFolders === root.folders.length || root.allDevicesPaused ? "paused"
         : "ok"
 
     readonly property color stateColor: root.colorForState(root.overallState)
@@ -92,6 +117,12 @@ PlasmoidItem {
             icon.name: "view-refresh"
             enabled: root.reachable
             onTriggered: root.rescanAll()
+        },
+        PlasmaCore.Action {
+            text: root.allDevicesPaused ? i18n("Resume All Devices") : i18n("Pause All Devices")
+            icon.name: root.allDevicesPaused ? "media-playback-start" : "media-playback-pause"
+            enabled: root.reachable && root.remoteDevices.length > 0 && !root.globalActionPending
+            onTriggered: root.requestGlobalPause(!root.allDevicesPaused)
         }
     ]
 
@@ -103,7 +134,8 @@ PlasmoidItem {
         switch (state) {
         case "ok": return Kirigami.Theme.positiveTextColor
         case "busy":
-        case "syncing": return Kirigami.Theme.neutralTextColor
+        case "syncing":
+        case "stale": return Kirigami.Theme.neutralTextColor
         case "error":
         case "offline":
         case "setup": return Kirigami.Theme.negativeTextColor
@@ -115,6 +147,11 @@ PlasmoidItem {
         for (var i = 0; i < root.folders.length; ++i)
             if (root.folders[i].id === id) return root.folders[i]
         return null
+    }
+
+    function folderName(id) {
+        var folder = root.folderById(id)
+        return folder ? (folder.label || folder.id) : id
     }
 
     function folderState(id) {
@@ -197,6 +234,133 @@ PlasmoidItem {
         return total
     }
 
+    function countPausedDevices() {
+        var total = 0
+        for (var i = 0; i < root.remoteDevices.length; ++i)
+            if (root.remoteDevices[i].paused) ++total
+        return total
+    }
+
+    function validTimestamp(stamp) {
+        if (!stamp) return false
+        var moment = new Date(stamp)
+        return !isNaN(moment.getTime()) && moment.getFullYear() >= 1971
+    }
+
+    function deviceIsOverdue(device) {
+        var tick = root.clockTick
+        var graceHours = Number(plasmoid.configuration.offlineGraceHours || 0)
+        if (!device || device.paused || graceHours <= 0) return false
+        var connection = root.deviceConnections[device.deviceID] || ({})
+        if (connection.connected) return false
+        var stats = root.deviceStats[device.deviceID] || ({})
+        if (!root.validTimestamp(stats.lastSeen)) return false
+        return Date.now() - new Date(stats.lastSeen).getTime() >= graceHours * 3600000
+    }
+
+    function countOverdueDevices() {
+        var total = 0
+        for (var i = 0; i < root.remoteDevices.length; ++i)
+            if (root.deviceIsOverdue(root.remoteDevices[i])) ++total
+        return total
+    }
+
+    function deviceState(device) {
+        if (!device) return "unknown"
+        if (device.paused) return "paused"
+        var connection = root.deviceConnections[device.deviceID] || ({})
+        if (connection.connected)
+            return root.deviceNeedsSync(device.deviceID) ? "busy" : "ok"
+        return root.deviceIsOverdue(device) ? "stale" : "offline"
+    }
+
+    function deviceNeedsSync(id) {
+        var completion = root.deviceCompletion[id] || ({})
+        if (Number(completion.needBytes || 0) > 0) return true
+        if (Number(completion.needItems || 0) > 0) return true
+        if (Number(completion.needDeletes || 0) > 0) return true
+        return completion.completion !== undefined && Number(completion.completion) < 100
+    }
+
+    function deviceStatusText(device) {
+        if (!device) return i18n("Unknown")
+        if (device.paused) return i18n("Paused")
+        var connection = root.deviceConnections[device.deviceID] || ({})
+        if (connection.connected) {
+            var completion = root.deviceCompletion[device.deviceID] || ({})
+            return root.deviceNeedsSync(device.deviceID)
+                ? (Number(completion.needBytes || 0) > 0
+                    ? i18n("Syncing · %1 left", root.formatBytes(completion.needBytes))
+                    : i18n("Syncing · %1% complete", Math.floor(Number(completion.completion || 0))))
+                : i18n("Connected · up to date")
+        }
+        var stats = root.deviceStats[device.deviceID] || ({})
+        return root.validTimestamp(stats.lastSeen)
+            ? i18n("Disconnected · last seen %1", root.formatWhen(stats.lastSeen))
+            : i18n("Disconnected · never seen")
+    }
+
+    function buildAttentionItems() {
+        var items = []
+        for (var i = 0; i < root.folders.length; ++i) {
+            var folder = root.folders[i]
+            var errors = root.folderErrors[folder.id] || []
+            if (root.folderState(folder.id) === "error" || errors.length > 0) {
+                items.push({
+                    kind: "folder",
+                    icon: "folder-sync",
+                    title: folder.label || folder.id,
+                    detail: errors.length > 0
+                        ? (errors[0].error || root.folderStateText(folder.id))
+                        : root.folderStateText(folder.id)
+                })
+            }
+        }
+        for (var errorIndex = root.systemErrors.length - 1; errorIndex >= 0; --errorIndex) {
+            var systemError = root.systemErrors[errorIndex] || ({})
+            items.push({
+                kind: "system",
+                icon: "dialog-error",
+                title: i18n("Syncthing error"),
+                detail: (systemError.message || systemError.error || i18n("Unknown system error"))
+                    + (root.validTimestamp(systemError.when || systemError.time)
+                        ? i18n(" · %1", root.formatWhen(systemError.when || systemError.time))
+                        : "")
+            })
+        }
+        for (var deviceId in root.pendingDevices) {
+            var pendingDevice = root.pendingDevices[deviceId] || ({})
+            items.push({
+                kind: "device",
+                icon: "network-connect",
+                title: pendingDevice.name || deviceId.slice(0, 7),
+                detail: pendingDevice.address
+                    ? i18n("New device invitation · %1", pendingDevice.address)
+                    : i18n("New device invitation")
+            })
+        }
+        for (var folderId in root.pendingFolderOffers) {
+            var offer = root.pendingFolderOffers[folderId] || ({})
+            var offeredBy = offer.offeredBy || ({})
+            var label = folderId
+            var names = []
+            for (var offeringDevice in offeredBy) {
+                var details = offeredBy[offeringDevice] || ({})
+                if (details.label) label = details.label
+                names.push(root.deviceName(offeringDevice))
+            }
+            items.push({
+                kind: "folderOffer",
+                icon: "folder-add",
+                title: label,
+                detail: names.length > 0
+                    ? i18n("Folder offered by %1", names.join(", "))
+                    : i18n("New folder invitation")
+            })
+        }
+        return items
+    }
+
     function deviceName(id) {
         for (var i = 0; i < root.devices.length; ++i)
             if (root.devices[i].deviceID === id)
@@ -208,9 +372,10 @@ PlasmoidItem {
         switch (root.overallState) {
         case "setup": return i18n("Syncthing was not found")
         case "offline": return i18n("Syncthing is not responding")
-        case "error": return i18np("%1 folder needs attention", "%1 folders need attention", root.errorFolders)
+        case "error": return i18np("%1 item needs attention", "%1 items need attention", root.attentionCount)
         case "syncing": return i18n("Syncing · %1%", Math.floor(root.overallPercent))
-        case "paused": return i18n("Every folder is paused")
+        case "stale": return i18np("%1 device is overdue", "%1 devices are overdue", root.overdueDevices)
+        case "paused": return root.allDevicesPaused ? i18n("All devices are paused") : i18n("Every folder is paused")
         case "empty": return i18n("No folders are configured")
         default: return i18n("Everything is up to date")
         }
@@ -228,6 +393,10 @@ PlasmoidItem {
             parts.push(i18np("%1 item left", "%1 items left", root.totalNeedItems))
         if (root.pausedFolders > 0 && root.overallState !== "paused")
             parts.push(i18np("%1 paused", "%1 paused", root.pausedFolders))
+        if (root.overdueDevices > 0)
+            parts.push(i18np("%1 device overdue", "%1 devices overdue", root.overdueDevices))
+        if (root.validTimestamp(plasmoid.configuration.lastSuccessfulSync))
+            parts.push(i18n("synced %1", root.formatWhen(plasmoid.configuration.lastSuccessfulSync)))
         return parts.join(" · ")
     }
 
@@ -263,6 +432,7 @@ PlasmoidItem {
     }
 
     function formatWhen(stamp) {
+        var tick = root.clockTick
         if (!stamp) return i18n("never")
         var moment = new Date(stamp)
         if (isNaN(moment.getTime()) || moment.getFullYear() < 1971) return i18n("never")
@@ -273,6 +443,14 @@ PlasmoidItem {
         if (seconds < 86400) return i18np("%1 hour ago", "%1 hours ago", Math.floor(seconds / 3600))
         if (seconds < 604800) return i18np("%1 day ago", "%1 days ago", Math.floor(seconds / 86400))
         return moment.toLocaleDateString(Qt.locale(), Locale.ShortFormat)
+    }
+
+    function formatDuration(seconds) {
+        var total = Math.max(0, Math.floor(Number(seconds || 0)))
+        if (total < 60) return i18np("%1 second", "%1 seconds", total)
+        if (total < 3600) return i18np("%1 minute", "%1 minutes", Math.floor(total / 60))
+        if (total < 86400) return i18np("%1 hour", "%1 hours", Math.floor(total / 3600))
+        return i18np("%1 day", "%1 days", Math.floor(total / 86400))
     }
 
     function withEntry(map, key, value) {
@@ -323,6 +501,8 @@ PlasmoidItem {
         root.refreshConfig()
         root.refreshSystem()
         root.refreshConnections()
+        root.refreshDeviceStats()
+        root.refreshAttention()
         root.pollEvents()
     }
 
@@ -337,7 +517,7 @@ PlasmoidItem {
         root.locate(0)
     }
 
-    function api(method, path, done, payload) {
+    function api(method, path, done, payload, failed) {
         if (root.baseUrl === "") return
         var request = new XMLHttpRequest()
         request.open(method, root.baseUrl + path)
@@ -354,10 +534,12 @@ PlasmoidItem {
             } else if (request.status === 0) {
                 root.reachable = false
                 root.lastError = i18n("Cannot reach %1", root.baseUrl)
+                if (failed) failed(request.status)
             } else {
                 root.lastError = request.status === 403
                     ? i18n("The API key was rejected")
                     : i18n("Syncthing returned HTTP %1", request.status)
+                if (failed) failed(request.status)
             }
         }
         request.send(payload === undefined ? null : JSON.stringify(payload))
@@ -368,7 +550,12 @@ PlasmoidItem {
             root.folders = data || []
             for (var i = 0; i < root.folders.length; ++i) root.refreshFolder(root.folders[i].id)
         })
-        root.api("GET", "/rest/config/devices", function(data) { root.devices = data || [] })
+        root.api("GET", "/rest/config/devices", function(data) {
+            root.devices = data || []
+            root.devicesLoaded = true
+            root.refreshCompletion()
+            root.checkOfflineDevices()
+        })
         root.api("GET", "/rest/stats/folder", function(data) { root.folderStats = data || ({}) })
     }
 
@@ -389,6 +576,11 @@ PlasmoidItem {
             root.folderStatus = root.withEntry(root.folderStatus, id, data)
             if (Number(data.errors || 0) > 0) root.refreshFolderErrors(id)
             else if (root.folderErrors[id]) root.folderErrors = root.withEntry(root.folderErrors, id, [])
+            if (root.folderState(id) !== "busy") {
+                root.folderNeedItems = root.withEntry(root.folderNeedItems, id, [])
+                root.folderNeedLoading = root.withEntry(root.folderNeedLoading, id, false)
+            }
+            root.evaluateSyncState()
         })
     }
 
@@ -402,6 +594,7 @@ PlasmoidItem {
         root.api("GET", "/rest/system/connections", function(data) {
             if (!data) return
             root.deviceConnections = data.connections || ({})
+            root.connectionsLoaded = true
             var total = data.total || ({})
             var now = Date.now()
             if (root.sampledAt > 0 && now > root.sampledAt) {
@@ -412,6 +605,126 @@ PlasmoidItem {
             root.sampledIn = Number(total.inBytesTotal || 0)
             root.sampledOut = Number(total.outBytesTotal || 0)
             root.sampledAt = now
+            root.checkOfflineDevices()
+        })
+    }
+
+    function refreshDeviceStats() {
+        root.api("GET", "/rest/stats/device", function(data) {
+            root.deviceStats = data || ({})
+            root.deviceStatsLoaded = true
+            root.checkOfflineDevices()
+        })
+    }
+
+    function refreshAttention() {
+        root.api("GET", "/rest/system/error", function(data) {
+            root.systemErrors = data && data.errors ? data.errors : []
+        })
+        root.api("GET", "/rest/cluster/pending/devices", function(data) {
+            root.pendingDevices = data || ({})
+        })
+        root.api("GET", "/rest/cluster/pending/folders", function(data) {
+            root.pendingFolderOffers = data || ({})
+        })
+    }
+
+    function currentOfflineStates() {
+        var states = ({})
+        for (var i = 0; i < root.remoteDevices.length; ++i) {
+            var device = root.remoteDevices[i]
+            states[device.deviceID] = root.deviceIsOverdue(device)
+        }
+        return states
+    }
+
+    function checkOfflineDevices() {
+        if (!root.devicesLoaded || !root.connectionsLoaded || !root.deviceStatsLoaded) return
+        var next = root.currentOfflineStates()
+        if (!root.offlineBaselineReady) {
+            root.offlineStates = next
+            root.offlineBaselineReady = true
+            return
+        }
+        if (plasmoid.configuration.notifyOfflineDevices) {
+            for (var deviceId in next) {
+                if (next[deviceId] && !root.offlineStates[deviceId]) {
+                    root.sendNotification(
+                        i18n("Syncthing device overdue"),
+                        i18n("%1 has been offline longer than %2 hours.",
+                            root.deviceName(deviceId), Number(plasmoid.configuration.offlineGraceHours || 0)),
+                        true)
+                }
+            }
+        }
+        root.offlineStates = next
+    }
+
+    function allFolderStatusesLoaded() {
+        if (root.folders.length === 0) return false
+        for (var i = 0; i < root.folders.length; ++i)
+            if (!root.folderStatus[root.folders[i].id]) return false
+        return true
+    }
+
+    function folderShowsTransfer(id) {
+        var status = root.folderStatus[id] || ({})
+        var state = String(status.state || "")
+        return Number(status.needTotalItems || 0) > 0 || state.indexOf("sync") === 0
+    }
+
+    function evaluateSyncState() {
+        if (!root.allFolderStatusesLoaded()) return
+        var active = false
+        for (var i = 0; i < root.folders.length; ++i) {
+            if (root.folderShowsTransfer(root.folders[i].id)) {
+                active = true
+                break
+            }
+        }
+        if (!root.syncTrackingReady) {
+            root.syncTrackingReady = true
+            root.syncWasActive = active
+            return
+        }
+        if (active) {
+            root.syncWasActive = true
+            return
+        }
+        if (!root.syncWasActive) return
+        root.syncWasActive = false
+        plasmoid.configuration.lastSuccessfulSync = new Date().toISOString()
+        if (plasmoid.configuration.notifySyncComplete)
+            root.sendNotification(i18n("Syncthing is up to date"), i18n("All folders finished syncing."), false)
+    }
+
+    function flattenNeedItems(data) {
+        var items = []
+        var groups = [
+            { key: "progress", stage: i18n("Now") },
+            { key: "queued", stage: i18n("Next") },
+            { key: "rest", stage: i18n("Later") }
+        ]
+        for (var groupIndex = 0; groupIndex < groups.length && items.length < 3; ++groupIndex) {
+            var group = groups[groupIndex]
+            var entries = data && data[group.key] ? data[group.key] : []
+            for (var itemIndex = 0; itemIndex < entries.length && items.length < 3; ++itemIndex) {
+                var entry = entries[itemIndex] || ({})
+                items.push({ name: entry.name || "", size: Number(entry.size || 0), stage: group.stage })
+            }
+        }
+        return items
+    }
+
+    function refreshFolderNeed(id) {
+        if (!id || root.folderState(id) !== "busy") return
+        if (root.folderNeedLoading[id] === true) return
+        root.folderNeedLoading = root.withEntry(root.folderNeedLoading, id, true)
+        root.api("GET", "/rest/db/need?folder=" + encodeURIComponent(id) + "&page=1&perpage=3", function(data) {
+            root.folderNeedItems = root.withEntry(root.folderNeedItems, id, root.flattenNeedItems(data))
+            root.folderNeedLoading = root.withEntry(root.folderNeedLoading, id, false)
+        }, undefined, function() {
+            root.folderNeedLoading = root.withEntry(root.folderNeedLoading, id, false)
         })
     }
 
@@ -477,12 +790,24 @@ PlasmoidItem {
             var data = event.data || ({})
             switch (event.type) {
             case "FolderSummary":
-                if (data.folder && data.summary)
+                if (data.folder && data.summary) {
                     root.folderStatus = root.withEntry(root.folderStatus, data.folder, data.summary)
+                    root.evaluateSyncState()
+                    if (root.openFolder === data.folder && root.folderState(data.folder) === "busy")
+                        root.pendingNeedFolders = root.withEntry(root.pendingNeedFolders, data.folder, true)
+                }
                 break
             case "FolderErrors":
-                if (data.folder)
+                if (data.folder) {
                     root.folderErrors = root.withEntry(root.folderErrors, data.folder, data.errors || [])
+                    if (plasmoid.configuration.notifyErrors && data.errors && data.errors.length > 0) {
+                        root.sendNotification(
+                            i18n("Syncthing folder error"),
+                            i18np("%1 failed item in %2", "%1 failed items in %2",
+                                data.errors.length, root.folderName(data.folder)),
+                            true)
+                    }
+                }
                 break
             case "StateChanged":
             case "FolderScanProgress":
@@ -494,6 +819,19 @@ PlasmoidItem {
             case "FolderWatchStateChanged":
                 if (data.folder) root.pendingFolders = root.withEntry(root.pendingFolders, data.folder, true)
                 root.pendingStats = true
+                if (event.type === "StateChanged" && data.folder && root.openFolder === data.folder)
+                    root.pendingNeedFolders = root.withEntry(root.pendingNeedFolders, data.folder, true)
+                break
+            case "ItemStarted":
+                if (root.syncTrackingReady) root.syncWasActive = true
+                if (data.folder && root.openFolder === data.folder)
+                    root.pendingNeedFolders = root.withEntry(root.pendingNeedFolders, data.folder, true)
+                break
+            case "ItemFinished":
+                if (data.folder) root.pendingFolders = root.withEntry(root.pendingFolders, data.folder, true)
+                if (data.folder && root.openFolder === data.folder)
+                    root.pendingNeedFolders = root.withEntry(root.pendingNeedFolders, data.folder, true)
+                root.pendingStats = true
                 break
             case "FolderCompletion":
                 root.pendingCompletion = true
@@ -504,6 +842,7 @@ PlasmoidItem {
             case "DeviceResumed":
                 root.pendingConnections = true
                 root.pendingCompletion = true
+                root.pendingDeviceStats = true
                 break
             case "ConfigSaved":
             case "FolderPaused":
@@ -514,6 +853,37 @@ PlasmoidItem {
             case "StartupComplete":
                 root.pendingConfig = true
                 root.pendingConnections = true
+                root.pendingAttention = true
+                root.pendingDeviceStats = true
+                break
+            case "PendingDevicesChanged":
+                root.pendingAttention = true
+                if (plasmoid.configuration.notifyInvitations && data.added && data.added.length > 0) {
+                    var addedDevice = data.added[0] || ({})
+                    root.sendNotification(
+                        i18n("New Syncthing device"),
+                        data.added.length === 1
+                            ? (addedDevice.name || addedDevice.deviceID || i18n("An unknown device wants to connect."))
+                            : i18np("%1 new device invitation", "%1 new device invitations", data.added.length),
+                        true)
+                }
+                break
+            case "PendingFoldersChanged":
+                root.pendingAttention = true
+                if (plasmoid.configuration.notifyInvitations && data.added && data.added.length > 0) {
+                    var addedFolder = data.added[0] || ({})
+                    root.sendNotification(
+                        i18n("New Syncthing folder"),
+                        data.added.length === 1
+                            ? (addedFolder.folderLabel || addedFolder.folderID || i18n("A device offered a folder."))
+                            : i18np("%1 new folder invitation", "%1 new folder invitations", data.added.length),
+                        false)
+                }
+                break
+            case "Failure":
+                root.pendingAttention = true
+                if (plasmoid.configuration.notifyErrors)
+                    root.sendNotification(i18n("Syncthing error"), data.error || data.message || i18n("Syncthing reported a failure."), true)
                 break
             }
         }
@@ -542,6 +912,16 @@ PlasmoidItem {
             root.pendingStats = false
             root.refreshStats()
         }
+        if (root.pendingAttention) {
+            root.pendingAttention = false
+            root.refreshAttention()
+        }
+        if (root.pendingDeviceStats) {
+            root.pendingDeviceStats = false
+            root.refreshDeviceStats()
+        }
+        for (var folderId in root.pendingNeedFolders) root.refreshFolderNeed(folderId)
+        root.pendingNeedFolders = ({})
     }
 
     function rescanFolder(id) {
@@ -565,6 +945,35 @@ PlasmoidItem {
         }, { paused: paused })
     }
 
+    function requestGlobalPause(paused) {
+        if (paused) pauseAllDialog.open()
+        else root.setGlobalPaused(false)
+    }
+
+    function setGlobalPaused(paused) {
+        if (root.globalActionPending) return
+        root.globalActionPending = true
+        root.api("POST", paused ? "/rest/system/pause" : "/rest/system/resume", function() {
+            root.globalActionPending = false
+            root.refreshConfig()
+            root.refreshConnections()
+            root.refreshDeviceStats()
+        }, undefined, function() {
+            root.globalActionPending = false
+        })
+    }
+
+    function sendNotification(title, text, urgent) {
+        var notification = notificationComponent.createObject(root)
+        if (!notification) return
+        notification.title = title
+        notification.text = text
+        notification.urgency = urgent
+            ? KNotifications.Notification.HighUrgency
+            : KNotifications.Notification.NormalUrgency
+        notification.sendEvent()
+    }
+
     function expandPath(path) {
         var value = String(path || "")
         if (value.indexOf("~") === 0) return root.homePath + value.slice(1)
@@ -581,11 +990,23 @@ PlasmoidItem {
 
     Component.onCompleted: root.connect()
     Component.onDestruction: if (root.eventRequest) root.eventRequest.abort()
+    onExpandedChanged: {
+        if (!root.expanded || !root.reachable) return
+        root.refreshSystem()
+        root.refreshStats()
+        root.refreshDeviceStats()
+        root.refreshAttention()
+        root.refreshCompletion()
+    }
 
     Connections {
         target: plasmoid.configuration
         function onServerUrlChanged() { root.reconnect() }
         function onApiKeyChanged() { root.reconnect() }
+        function onOfflineGraceHoursChanged() {
+            ++root.clockTick
+            root.checkOfflineDevices()
+        }
     }
 
     function reconnect() {
@@ -593,7 +1014,37 @@ PlasmoidItem {
         root.eventRequest = null
         root.lastEventId = 0
         root.reachable = false
+        root.devicesLoaded = false
+        root.connectionsLoaded = false
+        root.deviceStatsLoaded = false
+        root.offlineBaselineReady = false
+        root.offlineStates = ({})
+        root.syncTrackingReady = false
+        root.syncWasActive = false
         root.connect()
+    }
+
+    Component {
+        id: notificationComponent
+        KNotifications.Notification {
+            componentName: "plasma_workspace"
+            eventId: "notification"
+            iconName: "folder-sync"
+            flags: KNotifications.Notification.CloseOnTimeout
+            autoDelete: true
+        }
+    }
+
+    Kirigami.PromptDialog {
+        id: pauseAllDialog
+        title: i18n("Pause all Syncthing devices?")
+        standardButtons: Kirigami.Dialog.Ok | Kirigami.Dialog.Cancel
+        PlasmaComponents.Label {
+            text: i18n("This stops every remote-device connection until you resume them.")
+            wrapMode: Text.Wrap
+            Layout.maximumWidth: Kirigami.Units.gridUnit * 20
+        }
+        onAccepted: root.setGlobalPaused(true)
     }
 
     Timer {
@@ -619,10 +1070,16 @@ PlasmoidItem {
     Timer {
         interval: 60000
         repeat: true
-        running: root.expanded && root.reachable
+        running: root.reachable
         onTriggered: {
-            root.refreshSystem()
-            root.refreshStats()
+            ++root.clockTick
+            root.checkOfflineDevices()
+            if (root.expanded) {
+                root.refreshSystem()
+                root.refreshStats()
+                root.refreshDeviceStats()
+                root.refreshAttention()
+            }
         }
     }
 
@@ -683,35 +1140,45 @@ PlasmoidItem {
         }
     }
 
-    component StatTile: ColumnLayout {
+    component StatTile: Item {
         id: tile
         property string label: ""
         property string value: ""
         property string iconName: ""
         property color valueColor: Kirigami.Theme.textColor
         Layout.fillWidth: true
-        spacing: 0
-        RowLayout {
-            Layout.alignment: Qt.AlignHCenter
-            spacing: Kirigami.Units.smallSpacing
-            Kirigami.Icon {
-                visible: tile.iconName !== ""
-                source: tile.iconName
-                color: tile.valueColor
-                Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                Layout.preferredHeight: Kirigami.Units.iconSizes.small
+        Layout.minimumWidth: 0
+        Layout.preferredWidth: 1
+        implicitHeight: tileContent.implicitHeight
+
+        ColumnLayout {
+            id: tileContent
+            anchors.fill: parent
+            spacing: 0
+
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: Kirigami.Units.smallSpacing
+                Kirigami.Icon {
+                    visible: tile.iconName !== ""
+                    source: tile.iconName
+                    color: tile.valueColor
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                }
+                PlasmaComponents.Label {
+                    text: tile.value
+                    color: tile.valueColor
+                    font.weight: Font.DemiBold
+                }
             }
             PlasmaComponents.Label {
-                text: tile.value
-                color: tile.valueColor
-                font.weight: Font.DemiBold
+                text: tile.label
+                font: Kirigami.Theme.smallFont
+                opacity: 0.65
+                horizontalAlignment: Text.AlignHCenter
+                Layout.fillWidth: true
             }
-        }
-        PlasmaComponents.Label {
-            text: tile.label
-            font: Kirigami.Theme.smallFont
-            opacity: 0.65
-            Layout.alignment: Qt.AlignHCenter
         }
     }
 
@@ -834,6 +1301,17 @@ PlasmoidItem {
                 }
 
                 QQC2.ToolButton {
+                    icon.name: root.allDevicesPaused ? "media-playback-start" : "media-playback-pause"
+                    enabled: root.reachable && root.remoteDevices.length > 0 && !root.globalActionPending
+                    onClicked: root.requestGlobalPause(!root.allDevicesPaused)
+                    Layout.alignment: Qt.AlignTop
+                    Accessible.name: root.allDevicesPaused ? i18n("Resume all devices") : i18n("Pause all devices")
+                    QQC2.ToolTip.visible: hovered
+                    QQC2.ToolTip.delay: 400
+                    QQC2.ToolTip.text: Accessible.name
+                }
+
+                QQC2.ToolButton {
                     icon.name: "internet-web-browser"
                     enabled: root.baseUrl !== ""
                     onClicked: root.openWebInterface()
@@ -857,7 +1335,7 @@ PlasmoidItem {
                 Layout.fillWidth: true
                 Layout.topMargin: Kirigami.Units.smallSpacing
                 Layout.bottomMargin: Kirigami.Units.smallSpacing
-                spacing: Kirigami.Units.smallSpacing
+                spacing: 0
                 StatTile {
                     iconName: "go-down"
                     value: root.formatRate(root.inRate)
@@ -874,14 +1352,14 @@ PlasmoidItem {
                     label: i18n("Local data")
                 }
                 StatTile {
-                    iconName: root.totalFailedItems > 0 ? "dialog-warning" : "checkmark"
-                    value: root.totalFailedItems > 0
-                        ? root.formatNumber(root.totalFailedItems)
+                    iconName: root.attentionCount > 0 ? "dialog-warning" : "checkmark"
+                    value: root.attentionCount > 0
+                        ? root.formatNumber(root.attentionCount)
                         : root.totalNeedItems > 0 ? root.formatNumber(root.totalNeedItems) : "0"
-                    valueColor: root.totalFailedItems > 0
+                    valueColor: root.attentionCount > 0
                         ? Kirigami.Theme.negativeTextColor
                         : root.totalNeedItems > 0 ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.textColor
-                    label: root.totalFailedItems > 0 ? i18n("Failed") : i18n("Pending")
+                    label: root.attentionCount > 0 ? i18n("Attention") : i18n("Pending")
                 }
             }
 
@@ -902,6 +1380,59 @@ PlasmoidItem {
                 ColumnLayout {
                     width: parent.width
                     spacing: 0
+
+                    SectionHeader {
+                        visible: root.attentionCount > 0
+                        title: i18n("Needs attention")
+                    }
+
+                    Repeater {
+                        model: root.attentionItems.slice(0, 6)
+                        delegate: RowCard {
+                            required property var modelData
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+
+                                Kirigami.Icon {
+                                    source: modelData.icon
+                                    color: Kirigami.Theme.negativeTextColor
+                                    Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
+                                    Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
+                                    Layout.alignment: Qt.AlignTop
+                                }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 0
+                                    PlasmaComponents.Label {
+                                        text: modelData.title
+                                        font.weight: Font.DemiBold
+                                        color: Kirigami.Theme.negativeTextColor
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+                                    PlasmaComponents.Label {
+                                        text: modelData.detail
+                                        font: Kirigami.Theme.smallFont
+                                        opacity: 0.75
+                                        wrapMode: Text.Wrap
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    PlasmaComponents.Label {
+                        readonly property int extraAttention: root.attentionCount - 6
+                        visible: extraAttention > 0
+                        text: i18np("%1 more item needs attention", "%1 more items need attention", extraAttention)
+                        font: Kirigami.Theme.smallFont
+                        opacity: 0.65
+                        Layout.fillWidth: true
+                        Layout.margins: Kirigami.Units.smallSpacing
+                    }
 
                     SectionHeader {
                         title: i18n("Folders")
@@ -947,6 +1478,7 @@ PlasmoidItem {
                                 StatusDot {
                                     state: folderCard.state
                                     Layout.alignment: Qt.AlignVCenter
+                                    Layout.rightMargin: Kirigami.Units.smallSpacing
                                 }
 
                                 ColumnLayout {
@@ -976,6 +1508,51 @@ PlasmoidItem {
                                     color: Kirigami.Theme.neutralTextColor
                                 }
 
+                                RowLayout {
+                                    id: folderActions
+                                    visible: folderCard.showDetail
+                                    spacing: 0
+
+                                    QQC2.ToolButton {
+                                        text: i18n("Open")
+                                        icon.name: "folder-open"
+                                        display: QQC2.AbstractButton.IconOnly
+                                        Accessible.name: text
+                                        QQC2.ToolTip.visible: hovered
+                                        QQC2.ToolTip.delay: 400
+                                        QQC2.ToolTip.text: text
+                                        onClicked: root.openFolderPath(folderCard.modelData.path)
+                                    }
+                                    QQC2.ToolButton {
+                                        text: i18n("Rescan")
+                                        icon.name: "view-refresh"
+                                        display: QQC2.AbstractButton.IconOnly
+                                        enabled: !folderCard.modelData.paused
+                                        Accessible.name: text
+                                        QQC2.ToolTip.visible: hovered
+                                        QQC2.ToolTip.delay: 400
+                                        QQC2.ToolTip.text: text
+                                        onClicked: root.rescanFolder(folderCard.folderId)
+                                    }
+                                    QQC2.ToolButton {
+                                        text: folderCard.modelData.paused ? i18n("Resume") : i18n("Pause")
+                                        icon.name: folderCard.modelData.paused ? "media-playback-start" : "media-playback-pause"
+                                        display: QQC2.AbstractButton.IconOnly
+                                        Accessible.name: text
+                                        QQC2.ToolTip.visible: hovered
+                                        QQC2.ToolTip.delay: 400
+                                        QQC2.ToolTip.text: text
+                                        onClicked: root.setFolderPaused(folderCard.folderId, !folderCard.modelData.paused)
+                                    }
+                                }
+
+                                Kirigami.Separator {
+                                    visible: folderCard.showDetail
+                                    Layout.preferredWidth: 1
+                                    Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
+                                    Layout.alignment: Qt.AlignVCenter
+                                }
+
                                 Kirigami.Icon {
                                     source: folderCard.showDetail ? "go-down" : "go-next"
                                     opacity: 0.6
@@ -984,7 +1561,17 @@ PlasmoidItem {
                                 }
 
                                 TapHandler {
-                                    onTapped: root.openFolder = folderCard.showDetail ? "" : folderCard.folderId
+                                    id: folderTapHandler
+                                    onTapped: {
+                                        var position = folderTapHandler.point.position
+                                        if (folderActions.visible
+                                                && position.x >= folderActions.x
+                                                && position.x <= folderActions.x + folderActions.width)
+                                            return
+                                        root.openFolder = folderCard.showDetail ? "" : folderCard.folderId
+                                        if (root.openFolder === folderCard.folderId && folderCard.state === "busy")
+                                            root.refreshFolderNeed(folderCard.folderId)
+                                    }
                                 }
                             }
 
@@ -1024,6 +1611,51 @@ PlasmoidItem {
                                         root.formatBytes(folderCard.status.needBytes),
                                         root.formatNumber(folderCard.status.needTotalItems))
                                 }
+                                ColumnLayout {
+                                    readonly property var queueItems: root.folderNeedItems[folderCard.folderId] || []
+                                    visible: folderCard.state === "busy"
+                                        && (root.folderNeedLoading[folderCard.folderId] || queueItems.length > 0)
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: Kirigami.Units.smallSpacing
+                                    spacing: 2
+
+                                    PlasmaComponents.Label {
+                                        text: i18n("Sync queue")
+                                        font.weight: Font.DemiBold
+                                        font.pointSize: Kirigami.Theme.smallFont.pointSize
+                                        opacity: 0.75
+                                    }
+                                    QQC2.ProgressBar {
+                                        visible: root.folderNeedLoading[folderCard.folderId] === true
+                                        indeterminate: true
+                                        Layout.fillWidth: true
+                                    }
+                                    Repeater {
+                                        model: parent.queueItems
+                                        delegate: RowLayout {
+                                            required property var modelData
+                                            Layout.fillWidth: true
+                                            spacing: Kirigami.Units.smallSpacing
+                                            PlasmaComponents.Label {
+                                                text: modelData.stage
+                                                font: Kirigami.Theme.smallFont
+                                                opacity: 0.55
+                                                Layout.preferredWidth: Kirigami.Units.gridUnit * 2.5
+                                            }
+                                            PlasmaComponents.Label {
+                                                text: modelData.name
+                                                font: Kirigami.Theme.smallFont
+                                                elide: Text.ElideMiddle
+                                                Layout.fillWidth: true
+                                            }
+                                            PlasmaComponents.Label {
+                                                text: root.formatBytes(modelData.size)
+                                                font: Kirigami.Theme.smallFont
+                                                opacity: 0.65
+                                            }
+                                        }
+                                    }
+                                }
                                 DetailRow {
                                     label: i18n("Shared with")
                                     value: folderCard.sharedWith()
@@ -1062,28 +1694,6 @@ PlasmoidItem {
                                     Layout.fillWidth: true
                                 }
 
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    Layout.topMargin: Kirigami.Units.smallSpacing
-                                    spacing: Kirigami.Units.smallSpacing
-                                    QQC2.Button {
-                                        text: i18n("Open")
-                                        icon.name: "folder-open"
-                                        onClicked: root.openFolderPath(folderCard.modelData.path)
-                                    }
-                                    QQC2.Button {
-                                        text: i18n("Rescan")
-                                        icon.name: "view-refresh"
-                                        enabled: !folderCard.modelData.paused
-                                        onClicked: root.rescanFolder(folderCard.folderId)
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    QQC2.Button {
-                                        text: folderCard.modelData.paused ? i18n("Resume") : i18n("Pause")
-                                        icon.name: folderCard.modelData.paused ? "media-playback-start" : "media-playback-pause"
-                                        onClicked: root.setFolderPaused(folderCard.folderId, !folderCard.modelData.paused)
-                                    }
-                                }
                             }
 
                             function sharedWith() {
@@ -1117,12 +1727,9 @@ PlasmoidItem {
                             readonly property string deviceId: deviceCard.modelData.deviceID
                             readonly property var connection: root.deviceConnections[deviceCard.deviceId] || ({})
                             readonly property var completion: root.deviceCompletion[deviceCard.deviceId] || ({})
+                            readonly property var stats: root.deviceStats[deviceCard.deviceId] || ({})
                             readonly property bool showDetail: root.openDevice === deviceCard.deviceId
-                            readonly property string state: deviceCard.modelData.paused
-                                ? "paused"
-                                : !deviceCard.connection.connected ? "offline"
-                                : Number(deviceCard.completion.needBytes || 0) > 0 ? "busy"
-                                : "ok"
+                            readonly property string state: root.deviceState(deviceCard.modelData)
                             current: deviceCard.showDetail
 
                             RowLayout {
@@ -1132,6 +1739,7 @@ PlasmoidItem {
                                 StatusDot {
                                     state: deviceCard.state === "offline" ? "unknown" : deviceCard.state
                                     Layout.alignment: Qt.AlignVCenter
+                                    Layout.rightMargin: Kirigami.Units.smallSpacing
                                 }
 
                                 ColumnLayout {
@@ -1143,18 +1751,35 @@ PlasmoidItem {
                                         Layout.fillWidth: true
                                     }
                                     PlasmaComponents.Label {
-                                        text: deviceCard.modelData.paused
-                                            ? i18n("Paused")
-                                            : deviceCard.connection.connected
-                                                ? (Number(deviceCard.completion.needBytes || 0) > 0
-                                                    ? i18n("Syncing · %1 left", root.formatBytes(deviceCard.completion.needBytes))
-                                                    : i18n("Connected · up to date"))
-                                                : i18n("Disconnected")
+                                        text: root.deviceStatusText(deviceCard.modelData)
                                         font: Kirigami.Theme.smallFont
-                                        opacity: 0.65
+                                        color: deviceCard.state === "stale"
+                                            ? Kirigami.Theme.neutralTextColor
+                                            : Kirigami.Theme.textColor
+                                        opacity: deviceCard.state === "stale" ? 1 : 0.65
                                         elide: Text.ElideRight
                                         Layout.fillWidth: true
                                     }
+                                }
+
+                                QQC2.ToolButton {
+                                    id: devicePauseButton
+                                    visible: deviceCard.showDetail
+                                    text: deviceCard.modelData.paused ? i18n("Resume") : i18n("Pause")
+                                    icon.name: deviceCard.modelData.paused ? "media-playback-start" : "media-playback-pause"
+                                    display: QQC2.AbstractButton.IconOnly
+                                    Accessible.name: text
+                                    QQC2.ToolTip.visible: hovered
+                                    QQC2.ToolTip.delay: 400
+                                    QQC2.ToolTip.text: text
+                                    onClicked: root.setDevicePaused(deviceCard.deviceId, !deviceCard.modelData.paused)
+                                }
+
+                                Kirigami.Separator {
+                                    visible: deviceCard.showDetail
+                                    Layout.preferredWidth: 1
+                                    Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
+                                    Layout.alignment: Qt.AlignVCenter
                                 }
 
                                 Kirigami.Icon {
@@ -1165,7 +1790,15 @@ PlasmoidItem {
                                 }
 
                                 TapHandler {
-                                    onTapped: root.openDevice = deviceCard.showDetail ? "" : deviceCard.deviceId
+                                    id: deviceTapHandler
+                                    onTapped: {
+                                        var position = deviceTapHandler.point.position
+                                        if (devicePauseButton.visible
+                                                && position.x >= devicePauseButton.x
+                                                && position.x <= devicePauseButton.x + devicePauseButton.width)
+                                            return
+                                        root.openDevice = deviceCard.showDetail ? "" : deviceCard.deviceId
+                                    }
                                 }
                             }
 
@@ -1200,20 +1833,21 @@ PlasmoidItem {
                                     value: i18n("%1%", Math.floor(Number(deviceCard.completion.completion || 0)))
                                 }
                                 DetailRow {
+                                    label: i18n("Last seen")
+                                    value: root.validTimestamp(deviceCard.stats.lastSeen)
+                                        ? root.formatWhen(deviceCard.stats.lastSeen)
+                                        : i18n("never")
+                                }
+                                DetailRow {
+                                    visible: Number(deviceCard.stats.lastConnectionDurationS || 0) > 0
+                                    label: i18n("Last connection")
+                                    value: root.formatDuration(deviceCard.stats.lastConnectionDurationS)
+                                }
+                                DetailRow {
                                     label: i18n("Device ID")
                                     value: deviceCard.deviceId.slice(0, 7)
                                 }
 
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    Layout.topMargin: Kirigami.Units.smallSpacing
-                                    Item { Layout.fillWidth: true }
-                                    QQC2.Button {
-                                        text: deviceCard.modelData.paused ? i18n("Resume") : i18n("Pause")
-                                        icon.name: deviceCard.modelData.paused ? "media-playback-start" : "media-playback-pause"
-                                        onClicked: root.setDevicePaused(deviceCard.deviceId, !deviceCard.modelData.paused)
-                                    }
-                                }
                             }
                         }
                     }

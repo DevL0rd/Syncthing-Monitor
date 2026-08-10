@@ -10,11 +10,20 @@ folder needs attention.
 ## Features
 
 - Overall sync status, progress, transfer rates, and local data size
+- Consolidated attention inbox for folder failures, Syncthing errors, and new
+  device or folder invitations
 - Expandable folder rows with paths, modes, sizes, peers, recent changes, and
   failed items
+- On-demand current and upcoming file queue for actively syncing folders
 - Per-folder rescan, pause, resume, and open-folder controls
-- Remote-device connection, completion, version, address, and transfer details
+- Remote-device connection, completion, version, address, transfer, last-seen,
+  and previous connection-duration details
 - Pause and resume controls for remote devices
+- Guarded pause-all control and one-click resume-all
+- Configurable offline-device grace period with overdue status indication
+- Optional Plasma notifications for completed syncs, errors, invitations, and
+  overdue devices
+- Persisted last-successful-sync time
 - One-click access to the Syncthing web interface
 - Event-driven updates with lightweight periodic refreshes while open
 - Automatic discovery of the local Syncthing address and API key
@@ -27,6 +36,10 @@ folder needs attention.
 The automatic connection supports Syncthing configurations in the standard
 state, config, and data directories. A remote or nonstandard instance can be
 configured from the widget's **Connection** settings.
+
+The default offline warning grace period is 24 hours. Set it to zero to keep
+offline devices informational indefinitely. Notification categories can be
+enabled or disabled independently in the same settings page.
 
 ## Install
 

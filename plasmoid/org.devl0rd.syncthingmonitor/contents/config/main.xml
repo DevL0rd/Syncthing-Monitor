@@ -13,5 +13,28 @@
             <label>Syncthing API key</label>
             <default></default>
         </entry>
+        <entry name="offlineGraceHours" type="Int">
+            <label>Hours before an offline device needs attention</label>
+            <default>24</default>
+        </entry>
+        <entry name="notifySyncComplete" type="Bool">
+            <label>Notify when synchronization completes</label>
+            <default>true</default>
+        </entry>
+        <entry name="notifyErrors" type="Bool">
+            <label>Notify about synchronization errors</label>
+            <default>true</default>
+        </entry>
+        <entry name="notifyInvitations" type="Bool">
+            <label>Notify about new device and folder invitations</label>
+            <default>true</default>
+        </entry>
+        <entry name="notifyOfflineDevices" type="Bool">
+            <label>Notify when a device exceeds the offline grace period</label>
+            <default>false</default>
+        </entry>
+        <entry name="lastSuccessfulSync" type="String" hidden="true">
+            <default></default>
+        </entry>
     </group>
 </kcfg>

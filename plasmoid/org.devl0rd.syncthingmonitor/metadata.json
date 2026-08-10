@@ -9,7 +9,7 @@
         ],
         "Category": "System Information",
         "License": "GPL-3.0-or-later",
-        "Version": "1.0.0",
+        "Version": "1.1.0",
         "Website": "https://github.com/DevL0rd/Linux-Syncthing-Monitor"
     },
     "KPackageStructure": "Plasma/Applet",
