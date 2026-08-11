@@ -55,6 +55,9 @@ PlasmoidItem {
     property real diskEventRequestStartedAt: 0
     property int eventGeneration: 0
     property var remoteDownloadActivity: ({})
+    property bool completionTrackingReady: false
+    property bool completionPulseActive: false
+    property bool completionPulsePending: false
     property string openFolder: ""
     property string openDevice: ""
     property var pendingFolders: ({})
@@ -84,6 +87,9 @@ PlasmoidItem {
     readonly property int busyFolders: root.countFolders("busy")
     readonly property int activelySyncingFolders: root.countFoldersActivelySyncing()
     readonly property int activeRemoteSyncDevices: root.countActiveRemoteSyncDevices()
+    readonly property bool workActive: root.activelySyncingFolders > 0
+        || root.activeRemoteSyncDevices > 0
+        || root.busyFolders > 0
     readonly property int pausedFolders: root.countFolders("paused")
     readonly property bool allDevicesPaused: root.remoteDevices.length > 0
         && root.countPausedDevices() === root.remoteDevices.length
@@ -110,6 +116,25 @@ PlasmoidItem {
         : "ok"
 
     readonly property color stateColor: root.colorForState(root.overallState)
+
+    onOverallStateChanged: {
+        if (!root.completionTrackingReady) return
+        if (root.overallState === "error" || root.overallState === "offline"
+                || root.overallState === "setup" || root.overallState === "paused") {
+            root.cancelCompletionPulse()
+            return
+        }
+        root.maybeStartCompletionPulse()
+    }
+    onWorkActiveChanged: {
+        if (!root.completionTrackingReady) return
+        if (root.workActive && root.completionPulseActive) {
+            root.completionPulseActive = false
+            completionPulseTimer.stop()
+        } else if (!root.workActive) {
+            root.maybeStartCompletionPulse()
+        }
+    }
 
     Plasmoid.icon: "folder-sync"
     Plasmoid.title: i18n("Syncthing Monitor")
@@ -256,10 +281,15 @@ PlasmoidItem {
         return false
     }
 
-    function applyRemoteDownloadProgress(data) {
+    function applyRemoteDownloadProgress(data, notifyCompletion) {
         var device = String(data.device || "")
         var folder = String(data.folder || "")
         if (device === "" || folder === "") return
+        var hadActivity = false
+        for (var existingKey in root.remoteDownloadActivity) {
+            hadActivity = true
+            break
+        }
         var activityKey = device + "\u001f" + folder
         var next = ({})
         for (var key in root.remoteDownloadActivity) {
@@ -271,6 +301,14 @@ PlasmoidItem {
             break
         }
         root.remoteDownloadActivity = next
+        if (notifyCompletion && hadActivity) {
+            var hasActivity = false
+            for (var remainingKey in next) {
+                hasActivity = true
+                break
+            }
+            if (!hasActivity) root.markWorkCompleted()
+        }
     }
 
     function clearRemoteDownloadActivity(device, folder) {
@@ -291,7 +329,7 @@ PlasmoidItem {
             var data = event.data || ({})
             switch (event.type) {
             case "RemoteDownloadProgress":
-                root.applyRemoteDownloadProgress(data)
+                root.applyRemoteDownloadProgress(data, false)
                 break
             case "DeviceDisconnected":
             case "DevicePaused":
@@ -305,6 +343,27 @@ PlasmoidItem {
                 break
             }
         }
+    }
+
+    function markWorkCompleted() {
+        if (!root.completionTrackingReady) return
+        if (root.overallState === "error" || root.overallState === "offline"
+                || root.overallState === "setup" || root.overallState === "paused") return
+        root.completionPulsePending = true
+        root.maybeStartCompletionPulse()
+    }
+
+    function maybeStartCompletionPulse() {
+        if (!root.completionPulsePending || root.workActive || root.overallState !== "ok") return
+        root.completionPulsePending = false
+        root.completionPulseActive = true
+        completionPulseTimer.restart()
+    }
+
+    function cancelCompletionPulse() {
+        root.completionPulsePending = false
+        root.completionPulseActive = false
+        completionPulseTimer.stop()
     }
 
     function sumStatus(key) {
@@ -997,6 +1056,7 @@ PlasmoidItem {
             break
             case "StateChanged":
                 if (data.folder && data.to) root.applyFolderState(data.folder, data.to)
+                if (data.from && data.from !== "idle" && data.to === "idle") root.markWorkCompleted()
                 root.queueFolderEventRefresh(event.type, data)
                 break
             case "FolderScanProgress":
@@ -1061,7 +1121,7 @@ PlasmoidItem {
                 root.pendingConfig = true
                 break
             case "RemoteDownloadProgress":
-                root.applyRemoteDownloadProgress(data)
+                root.applyRemoteDownloadProgress(data, true)
                 root.pendingCompletion = true
                 break
             case "ClusterConfigReceived":
@@ -1339,7 +1399,10 @@ PlasmoidItem {
         if (root.baseUrl !== "") Qt.openUrlExternally(root.baseUrl)
     }
 
-    Component.onCompleted: root.connect()
+    Component.onCompleted: {
+        root.completionTrackingReady = true
+        root.connect()
+    }
     Component.onDestruction: root.stopEventStreams()
     onExpandedChanged: {
         if (!root.expanded) return
@@ -1404,6 +1467,12 @@ PlasmoidItem {
         id: refreshTimer
         interval: 100
         onTriggered: root.applyPending()
+    }
+
+    Timer {
+        id: completionPulseTimer
+        interval: 10000
+        onTriggered: root.completionPulseActive = false
     }
 
     Timer {
@@ -1479,7 +1548,7 @@ PlasmoidItem {
             border.color: Qt.alpha(Kirigami.Theme.backgroundColor, 0.9)
 
             SequentialAnimation on opacity {
-                running: root.overallState === "syncing"
+                running: root.overallState === "syncing" || root.completionPulseActive
                 loops: Animation.Infinite
                 alwaysRunToEnd: true
                 NumberAnimation { to: 0.3; duration: 750; easing.type: Easing.InOutQuad }
