@@ -4,8 +4,8 @@ Linux Syncthing Monitor is a compact Plasma 6 panel widget for checking and
 controlling a local Syncthing instance without keeping the web interface open.
 
 The panel icon has a small status dot: green when every folder is up to date,
-yellow while Syncthing is working, and red when Syncthing is unavailable or a
-folder needs attention.
+solid yellow when synchronization is pending, pulsing yellow while actively
+syncing, and red when Syncthing is unavailable or a folder needs attention.
 
 ## Features
 
@@ -51,11 +51,10 @@ cd Linux-Syncthing-Monitor
 
 Then open Plasma's **Add Widgets** menu and add **Syncthing Monitor** to a
 panel. The installer enables the Qt permission needed to discover Syncthing's
-local configuration and restarts Plasma once if the running session needs the
-new setting and Plasma is managed by its user service. Otherwise it asks you to
-log out and back in instead of launching Plasma from the installer environment.
-This permission applies to Plasma's QML process and is retained when the widget
-is uninstalled because other widgets may also rely on it.
+local configuration and always restarts Plasma through its managed user service
+as the final installation step. This permission applies to Plasma's QML process
+and is retained when the widget is uninstalled because other widgets may also
+rely on it.
 Middle-clicking the panel icon requests a rescan of every folder.
 
 ## Uninstall

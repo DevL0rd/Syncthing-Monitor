@@ -60,7 +60,7 @@ Kirigami.FormLayout {
     }
 
     QQC2.Label {
-        text: i18n("After this long offline, a device turns the overall status yellow. Set 0 to disable the warning.")
+        text: i18n("After this long offline, a device is highlighted in the device list. Set 0 to disable the warning.")
         opacity: 0.7
         wrapMode: Text.Wrap
         Layout.maximumWidth: Kirigami.Units.gridUnit * 24

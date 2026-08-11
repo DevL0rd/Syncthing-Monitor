@@ -75,6 +75,7 @@ PlasmoidItem {
     readonly property int connectedDevices: root.countConnectedDevices()
     readonly property int errorFolders: root.countFolders("error")
     readonly property int busyFolders: root.countFolders("busy")
+    readonly property int activelySyncingFolders: root.countFoldersActivelySyncing()
     readonly property int pausedFolders: root.countFolders("paused")
     readonly property bool allDevicesPaused: root.remoteDevices.length > 0
         && root.countPausedDevices() === root.remoteDevices.length
@@ -94,8 +95,8 @@ PlasmoidItem {
           root.setupError !== "" ? "setup"
         : !root.reachable ? "offline"
         : root.attentionCount > 0 ? "error"
-        : root.busyFolders > 0 ? "syncing"
-        : root.overdueDevices > 0 ? "stale"
+        : root.activelySyncingFolders > 0 ? "syncing"
+        : root.busyFolders > 0 ? "busy"
         : root.folders.length === 0 ? "empty"
         : root.pausedFolders === root.folders.length || root.allDevicesPaused ? "paused"
         : "ok"
@@ -216,6 +217,15 @@ PlasmoidItem {
         var total = 0
         for (var i = 0; i < root.folders.length; ++i)
             if (root.folderState(root.folders[i].id) === state) ++total
+        return total
+    }
+
+    function countFoldersActivelySyncing() {
+        var total = 0
+        for (var i = 0; i < root.folders.length; ++i) {
+            var status = root.folderStatus[root.folders[i].id] || ({})
+            if (status.state === "syncing") ++total
+        }
         return total
     }
 
@@ -377,7 +387,7 @@ PlasmoidItem {
         case "offline": return i18n("Syncthing is not responding")
         case "error": return i18np("%1 item needs attention", "%1 items need attention", root.attentionCount)
         case "syncing": return i18n("Syncing · %1%", Math.floor(root.overallPercent))
-        case "stale": return i18np("%1 device is overdue", "%1 devices are overdue", root.overdueDevices)
+        case "busy": return i18n("Synchronization pending")
         case "paused": return root.allDevicesPaused ? i18n("All devices are paused") : i18n("Every folder is paused")
         case "empty": return i18n("No folders are configured")
         default: return i18n("Everything is up to date")
