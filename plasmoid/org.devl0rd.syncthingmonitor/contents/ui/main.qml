@@ -48,7 +48,13 @@ PlasmoidItem {
     property real sampledOut: -1
     property real sampledAt: 0
     property int lastEventId: 0
+    property int lastDiskEventId: 0
     property var eventRequest: null
+    property var diskEventRequest: null
+    property real eventRequestStartedAt: 0
+    property real diskEventRequestStartedAt: 0
+    property int eventGeneration: 0
+    property var remoteDownloadActivity: ({})
     property string openFolder: ""
     property string openDevice: ""
     property var pendingFolders: ({})
@@ -57,6 +63,7 @@ PlasmoidItem {
     property bool pendingCompletion: false
     property bool pendingAttention: false
     property bool pendingDeviceStats: false
+    property bool pendingFullRefresh: false
     property var pendingNeedFolders: ({})
     property bool globalActionPending: false
     property bool syncTrackingReady: false
@@ -76,6 +83,7 @@ PlasmoidItem {
     readonly property int errorFolders: root.countFolders("error")
     readonly property int busyFolders: root.countFolders("busy")
     readonly property int activelySyncingFolders: root.countFoldersActivelySyncing()
+    readonly property int activeRemoteSyncDevices: root.countActiveRemoteSyncDevices()
     readonly property int pausedFolders: root.countFolders("paused")
     readonly property bool allDevicesPaused: root.remoteDevices.length > 0
         && root.countPausedDevices() === root.remoteDevices.length
@@ -95,7 +103,7 @@ PlasmoidItem {
           root.setupError !== "" ? "setup"
         : !root.reachable ? "offline"
         : root.attentionCount > 0 ? "error"
-        : root.activelySyncingFolders > 0 ? "syncing"
+        : root.activelySyncingFolders > 0 || root.activeRemoteSyncDevices > 0 ? "syncing"
         : root.busyFolders > 0 ? "busy"
         : root.folders.length === 0 ? "empty"
         : root.pausedFolders === root.folders.length || root.allDevicesPaused ? "paused"
@@ -229,6 +237,76 @@ PlasmoidItem {
         return total
     }
 
+    function countActiveRemoteSyncDevices() {
+        var devices = ({})
+        for (var key in root.remoteDownloadActivity) {
+            var activity = root.remoteDownloadActivity[key]
+            if (activity && activity.device) devices[activity.device] = true
+        }
+        var total = 0
+        for (var deviceId in devices) ++total
+        return total
+    }
+
+    function deviceIsReceiving(id) {
+        for (var key in root.remoteDownloadActivity) {
+            var activity = root.remoteDownloadActivity[key]
+            if (activity && activity.device === id) return true
+        }
+        return false
+    }
+
+    function applyRemoteDownloadProgress(data) {
+        var device = String(data.device || "")
+        var folder = String(data.folder || "")
+        if (device === "" || folder === "") return
+        var activityKey = device + "\u001f" + folder
+        var next = ({})
+        for (var key in root.remoteDownloadActivity) {
+            if (key !== activityKey) next[key] = root.remoteDownloadActivity[key]
+        }
+        var state = data.state || ({})
+        for (var path in state) {
+            next[activityKey] = { device: device, folder: folder }
+            break
+        }
+        root.remoteDownloadActivity = next
+    }
+
+    function clearRemoteDownloadActivity(device, folder) {
+        if (!device && !folder) return
+        var next = ({})
+        for (var key in root.remoteDownloadActivity) {
+            var activity = root.remoteDownloadActivity[key]
+            if ((device && activity.device === device) || (folder && activity.folder === folder)) continue
+            next[key] = activity
+        }
+        root.remoteDownloadActivity = next
+    }
+
+    function restoreRemoteDownloadActivity(events) {
+        root.remoteDownloadActivity = ({})
+        for (var index = 0; index < events.length; ++index) {
+            var event = events[index]
+            var data = event.data || ({})
+            switch (event.type) {
+            case "RemoteDownloadProgress":
+                root.applyRemoteDownloadProgress(data)
+                break
+            case "DeviceDisconnected":
+            case "DevicePaused":
+                root.clearRemoteDownloadActivity(data.id || data.device, "")
+                break
+            case "FolderPaused":
+                root.clearRemoteDownloadActivity("", data.folder)
+                break
+            case "Starting":
+                root.remoteDownloadActivity = ({})
+                break
+            }
+        }
+    }
+
     function sumStatus(key) {
         var total = 0
         for (var i = 0; i < root.folders.length; ++i) {
@@ -283,7 +361,7 @@ PlasmoidItem {
         if (device.paused) return "paused"
         var connection = root.deviceConnections[device.deviceID] || ({})
         if (connection.connected)
-            return root.deviceNeedsSync(device.deviceID) ? "busy" : "ok"
+            return root.deviceIsReceiving(device.deviceID) || root.deviceNeedsSync(device.deviceID) ? "busy" : "ok"
         return root.deviceIsOverdue(device) ? "stale" : "offline"
     }
 
@@ -300,6 +378,7 @@ PlasmoidItem {
         if (device.paused) return i18n("Paused")
         var connection = root.deviceConnections[device.deviceID] || ({})
         if (connection.connected) {
+            if (root.deviceIsReceiving(device.deviceID)) return i18n("Receiving files")
             var completion = root.deviceCompletion[device.deviceID] || ({})
             return root.deviceNeedsSync(device.deviceID)
                 ? (Number(completion.needBytes || 0) > 0
@@ -386,7 +465,12 @@ PlasmoidItem {
         case "setup": return i18n("Syncthing was not found")
         case "offline": return i18n("Syncthing is not responding")
         case "error": return i18np("%1 item needs attention", "%1 items need attention", root.attentionCount)
-        case "syncing": return i18n("Syncing · %1%", Math.floor(root.overallPercent))
+        case "syncing":
+            if (root.activeRemoteSyncDevices > 0 && root.activelySyncingFolders === 0)
+                return i18np("Syncing with %1 device", "Syncing with %1 devices", root.activeRemoteSyncDevices)
+            if (root.activeRemoteSyncDevices > 0) return i18n("Syncing with devices")
+            if (root.totalNeedBytes > 0) return i18n("Syncing · %1%", Math.floor(root.overallPercent))
+            return i18n("Syncing")
         case "busy": return i18n("Synchronization pending")
         case "paused": return root.allDevicesPaused ? i18n("All devices are paused") : i18n("Every folder is paused")
         case "empty": return i18n("No folders are configured")
@@ -400,6 +484,8 @@ PlasmoidItem {
         var parts = [i18np("%1 folder", "%1 folders", root.folders.length)]
         if (root.remoteDevices.length > 0)
             parts.push(i18n("%1 of %2 devices online", root.connectedDevices, root.remoteDevices.length))
+        if (root.activeRemoteSyncDevices > 0)
+            parts.push(i18np("%1 remote device syncing", "%1 remote devices syncing", root.activeRemoteSyncDevices))
         if (root.totalNeedBytes > 0)
             parts.push(i18n("%1 left", root.formatBytes(root.totalNeedBytes)))
         else if (root.totalNeedItems > 0)
@@ -532,12 +618,14 @@ PlasmoidItem {
 
     function api(method, path, done, payload, failed) {
         if (root.baseUrl === "") return
+        var generation = root.eventGeneration
         var request = new XMLHttpRequest()
         request.open(method, root.baseUrl + path)
         request.setRequestHeader("X-API-Key", root.apiKey)
         if (payload !== undefined) request.setRequestHeader("Content-Type", "application/json")
         request.onreadystatechange = function() {
             if (request.readyState !== XMLHttpRequest.DONE) return
+            if (generation !== root.eventGeneration) return
             if (request.status >= 200 && request.status < 300) {
                 root.reachable = true
                 root.lastError = ""
@@ -766,50 +854,125 @@ PlasmoidItem {
         root.refreshAttention()
     }
 
-    function pollEvents() {
-        if (root.baseUrl === "") return
-        if (root.lastEventId === 0) {
-            root.api("GET", "/rest/events?limit=1", function(data) {
-                if (data && data.length > 0) root.lastEventId = Number(data[data.length - 1].id || 0)
-                root.waitForEvents()
-            })
-            return
-        }
-        root.waitForEvents()
+    function eventCursor(diskEvents) {
+        return diskEvents ? root.lastDiskEventId : root.lastEventId
     }
 
-    function waitForEvents() {
+    function setEventCursor(diskEvents, value) {
+        if (diskEvents) root.lastDiskEventId = value
+        else root.lastEventId = value
+    }
+
+    function eventStreamRequest(diskEvents) {
+        return diskEvents ? root.diskEventRequest : root.eventRequest
+    }
+
+    function setEventStreamRequest(diskEvents, request) {
+        if (diskEvents) root.diskEventRequest = request
+        else root.eventRequest = request
+    }
+
+    function setEventRequestStartedAt(diskEvents, value) {
+        if (diskEvents) root.diskEventRequestStartedAt = value
+        else root.eventRequestStartedAt = value
+    }
+
+    function stopEventStreams() {
+        ++root.eventGeneration
+        var normalRequest = root.eventRequest
+        var diskRequest = root.diskEventRequest
+        root.eventRequest = null
+        root.diskEventRequest = null
+        root.eventRequestStartedAt = 0
+        root.diskEventRequestStartedAt = 0
+        if (normalRequest) normalRequest.abort()
+        if (diskRequest) diskRequest.abort()
+    }
+
+    function pollEvents() {
+        if (root.baseUrl === "" || root.apiKey === "") return
+        if (root.eventRequest || root.diskEventRequest) return
+        var generation = root.eventGeneration
+        root.requestEvents(false, root.lastEventId === 0, generation)
+        root.requestEvents(true, root.lastDiskEventId === 0, generation)
+    }
+
+    function requestEvents(diskEvents, bootstrap, generation) {
+        if (generation !== root.eventGeneration || root.eventStreamRequest(diskEvents)) return
+        var cursor = root.eventCursor(diskEvents)
+        var endpoint = diskEvents ? "/rest/events/disk" : "/rest/events"
+        var query = bootstrap
+            ? "?since=0&limit=" + (diskEvents ? 1 : 256) + "&timeout=0"
+            : "?since=" + cursor + "&timeout=55"
         var request = new XMLHttpRequest()
-        root.eventRequest = request
-        request.open("GET", root.baseUrl + "/rest/events?since=" + root.lastEventId + "&timeout=55")
+        root.setEventStreamRequest(diskEvents, request)
+        root.setEventRequestStartedAt(diskEvents, Date.now())
+        request.open("GET", root.baseUrl + endpoint + query)
         request.setRequestHeader("X-API-Key", root.apiKey)
         request.onreadystatechange = function() {
             if (request.readyState !== XMLHttpRequest.DONE) return
-            root.eventRequest = null
+            if (generation !== root.eventGeneration) return
+            if (root.eventStreamRequest(diskEvents) !== request) return
+            root.setEventStreamRequest(diskEvents, null)
+            root.setEventRequestStartedAt(diskEvents, 0)
             if (request.status >= 200 && request.status < 300) {
                 root.reachable = true
                 root.lastError = ""
-                var events = null
-                try { events = JSON.parse(request.responseText || "[]") } catch (error) { events = [] }
-                root.handleEvents(events || [])
-                root.waitForEvents()
+                reconnectTimer.stop()
+                var events
+                try {
+                    events = JSON.parse(request.responseText || "[]")
+                    if (!Array.isArray(events)) throw new Error("Invalid event response")
+                } catch (error) {
+                    root.failEventStreams(0, generation)
+                    return
+                }
+                if (bootstrap) {
+                    if (events.length > 0) {
+                        root.setEventCursor(diskEvents, Number(events[events.length - 1].id || 0))
+                        if (!diskEvents) root.restoreRemoteDownloadActivity(events)
+                    }
+                } else {
+                    if (events.length > 0) {
+                        var newestId = cursor
+                        for (var index = 0; index < events.length; ++index) {
+                            var currentId = Number(events[index].id || 0)
+                            if (newestId > 0 && currentId > newestId + 1) {
+                                root.pendingFullRefresh = true
+                                if (!diskEvents) root.remoteDownloadActivity = ({})
+                            }
+                            newestId = Math.max(newestId, currentId)
+                        }
+                        root.setEventCursor(diskEvents, newestId)
+                        root.handleEvents(events)
+                    }
+                }
+                root.requestEvents(diskEvents, false, generation)
             } else {
-                root.reachable = false
-                root.lastEventId = 0
-                root.lastError = request.status === 0
-                    ? i18n("Cannot reach %1", root.baseUrl)
-                    : i18n("Syncthing returned HTTP %1", request.status)
-                reconnectTimer.restart()
+                root.failEventStreams(request.status, generation)
             }
         }
         request.send()
     }
 
+    function failEventStreams(status, generation) {
+        if (generation !== root.eventGeneration) return
+        root.stopEventStreams()
+        root.lastEventId = 0
+        root.lastDiskEventId = 0
+        root.remoteDownloadActivity = ({})
+        root.reachable = false
+        root.lastError = status === 403
+            ? i18n("The API key was rejected")
+            : status === 0
+                ? i18n("Cannot reach %1", root.baseUrl)
+                : i18n("Syncthing returned HTTP %1", status)
+        reconnectTimer.restart()
+    }
+
     function handleEvents(events) {
         for (var i = 0; i < events.length; ++i) {
             var event = events[i]
-            var id = Number(event.id || 0)
-            if (id > root.lastEventId) root.lastEventId = id
             var data = event.data || ({})
             switch (event.type) {
             case "FolderSummary":
@@ -830,9 +993,12 @@ PlasmoidItem {
                                 data.errors.length, root.folderName(data.folder)),
                             true)
                     }
-                }
-                break
+            }
+            break
             case "StateChanged":
+                if (data.folder && data.to) root.applyFolderState(data.folder, data.to)
+                root.queueFolderEventRefresh(event.type, data)
+                break
             case "FolderScanProgress":
             case "DownloadProgress":
             case "LocalIndexUpdated":
@@ -840,10 +1006,7 @@ PlasmoidItem {
             case "LocalChangeDetected":
             case "RemoteChangeDetected":
             case "FolderWatchStateChanged":
-                if (data.folder) root.pendingFolders = root.withEntry(root.pendingFolders, data.folder, true)
-                root.pendingStats = true
-                if (event.type === "StateChanged" && data.folder && root.openFolder === data.folder)
-                    root.pendingNeedFolders = root.withEntry(root.pendingNeedFolders, data.folder, true)
+                root.queueFolderEventRefresh(event.type, data)
                 break
             case "ItemStarted":
                 if (root.syncTrackingReady) root.syncWasActive = true
@@ -860,19 +1023,61 @@ PlasmoidItem {
                 root.pendingCompletion = true
                 break
             case "DeviceConnected":
+                root.applyDeviceConnected(data.id || data.device, true)
+                root.pendingConnections = true
+                root.pendingCompletion = true
+                root.pendingDeviceStats = true
+                break
             case "DeviceDisconnected":
+                root.applyDeviceConnected(data.id || data.device, false)
+                root.clearRemoteDownloadActivity(data.id || data.device, "")
+                root.pendingConnections = true
+                root.pendingCompletion = true
+                root.pendingDeviceStats = true
+                break
             case "DevicePaused":
+                root.applyDevicePaused(data.id || data.device, true)
+                root.clearRemoteDownloadActivity(data.id || data.device, "")
+                root.pendingConnections = true
+                root.pendingCompletion = true
+                root.pendingDeviceStats = true
+                break
             case "DeviceResumed":
+                root.applyDevicePaused(data.id || data.device, false)
                 root.pendingConnections = true
                 root.pendingCompletion = true
                 root.pendingDeviceStats = true
                 break
             case "ConfigSaved":
-            case "FolderPaused":
-            case "FolderResumed":
                 root.pendingConfig = true
                 break
+            case "FolderPaused":
+                root.applyFolderPaused(data.folder, true)
+                root.clearRemoteDownloadActivity("", data.folder)
+                root.pendingConfig = true
+                break
+            case "FolderResumed":
+                root.applyFolderPaused(data.folder, false)
+                root.pendingConfig = true
+                break
+            case "RemoteDownloadProgress":
+                root.applyRemoteDownloadProgress(data)
+                root.pendingCompletion = true
+                break
+            case "ClusterConfigReceived":
+                root.pendingCompletion = true
+                break
+            case "DeviceRejected":
+            case "FolderRejected":
+                root.pendingAttention = true
+                break
             case "Starting":
+                root.remoteDownloadActivity = ({})
+                root.pendingConfig = true
+                root.pendingConnections = true
+                root.pendingAttention = true
+                root.pendingDeviceStats = true
+                break
             case "StartupComplete":
                 root.pendingConfig = true
                 root.pendingConnections = true
@@ -909,14 +1114,106 @@ PlasmoidItem {
                 if (plasmoid.configuration.notifyErrors && root.shouldNotifyFailure(failureMessage))
                     root.sendNotification(i18n("Syncthing error"), failureMessage, true)
                 break
+            case "DeviceDiscovered":
+            case "ListenAddressesChanged":
+            case "LoginAttempt":
+            case "UpgradeRestartScheduled":
+                break
+            default:
+                root.pendingFullRefresh = true
+                break
             }
         }
-        if (events.length > 0) refreshTimer.restart()
+        if (events.length > 0 && !refreshTimer.running) refreshTimer.start()
     }
 
     property bool pendingStats: false
 
+    function queueFolderEventRefresh(eventType, data) {
+        if (eventType === "DownloadProgress") {
+            var hasFolder = false
+            for (var folderId in data) {
+                root.pendingFolders = root.withEntry(root.pendingFolders, folderId, true)
+                hasFolder = true
+            }
+            if (!hasFolder) {
+                for (var index = 0; index < root.folders.length; ++index)
+                    root.pendingFolders = root.withEntry(root.pendingFolders, root.folders[index].id, true)
+            }
+        } else if (data.folder) {
+            root.pendingFolders = root.withEntry(root.pendingFolders, data.folder, true)
+        }
+        root.pendingStats = true
+        if (eventType === "StateChanged" && data.folder && root.openFolder === data.folder)
+            root.pendingNeedFolders = root.withEntry(root.pendingNeedFolders, data.folder, true)
+    }
+
+    function applyFolderState(id, state) {
+        var current = root.folderStatus[id]
+        if (!current) return
+        var next = ({})
+        for (var key in current) next[key] = current[key]
+        next.state = state
+        root.folderStatus = root.withEntry(root.folderStatus, id, next)
+    }
+
+    function applyDeviceConnected(id, connected) {
+        if (!id) return
+        var current = root.deviceConnections[id] || ({})
+        var next = ({})
+        for (var key in current) next[key] = current[key]
+        next.connected = connected
+        root.deviceConnections = root.withEntry(root.deviceConnections, id, next)
+    }
+
+    function applyDevicePaused(id, paused) {
+        if (!id) return
+        var next = []
+        for (var index = 0; index < root.devices.length; ++index) {
+            var current = root.devices[index]
+            if (current.deviceID !== id) {
+                next.push(current)
+                continue
+            }
+            var updated = ({})
+            for (var key in current) updated[key] = current[key]
+            updated.paused = paused
+            next.push(updated)
+        }
+        root.devices = next
+    }
+
+    function applyFolderPaused(id, paused) {
+        if (!id) return
+        var next = []
+        for (var index = 0; index < root.folders.length; ++index) {
+            var current = root.folders[index]
+            if (current.id !== id) {
+                next.push(current)
+                continue
+            }
+            var updated = ({})
+            for (var key in current) updated[key] = current[key]
+            updated.paused = paused
+            next.push(updated)
+        }
+        root.folders = next
+    }
+
     function applyPending() {
+        if (root.pendingFullRefresh) {
+            root.pendingFullRefresh = false
+            root.pendingFolders = ({})
+            root.pendingConfig = false
+            root.pendingConnections = false
+            root.pendingCompletion = false
+            root.pendingStats = false
+            root.pendingAttention = false
+            root.pendingDeviceStats = false
+            root.pendingNeedFolders = ({})
+            root.refreshAllData()
+            return
+        }
         for (var id in root.pendingFolders) root.refreshFolder(id)
         root.pendingFolders = ({})
         if (root.pendingConfig) {
@@ -1043,7 +1340,7 @@ PlasmoidItem {
     }
 
     Component.onCompleted: root.connect()
-    Component.onDestruction: if (root.eventRequest) root.eventRequest.abort()
+    Component.onDestruction: root.stopEventStreams()
     onExpandedChanged: {
         if (!root.expanded) return
         if (root.baseUrl === "" || root.apiKey === "") {
@@ -1064,9 +1361,11 @@ PlasmoidItem {
     }
 
     function reconnect() {
-        if (root.eventRequest) root.eventRequest.abort()
-        root.eventRequest = null
+        reconnectTimer.stop()
+        root.stopEventStreams()
         root.lastEventId = 0
+        root.lastDiskEventId = 0
+        root.remoteDownloadActivity = ({})
         root.reachable = false
         root.devicesLoaded = false
         root.connectionsLoaded = false
@@ -1103,14 +1402,26 @@ PlasmoidItem {
 
     Timer {
         id: refreshTimer
-        interval: 400
+        interval: 100
         onTriggered: root.applyPending()
     }
 
     Timer {
         id: reconnectTimer
-        interval: 5000
+        interval: 1000
         onTriggered: root.connect()
+    }
+
+    Timer {
+        interval: 5000
+        repeat: true
+        running: root.eventRequest !== null || root.diskEventRequest !== null
+        onTriggered: {
+            var now = Date.now()
+            if ((root.eventRequestStartedAt > 0 && now - root.eventRequestStartedAt > 65000)
+                    || (root.diskEventRequestStartedAt > 0 && now - root.diskEventRequestStartedAt > 65000))
+                root.failEventStreams(0, root.eventGeneration)
+        }
     }
 
     Timer {
