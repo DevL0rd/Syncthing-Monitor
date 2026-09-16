@@ -87,7 +87,11 @@ PlasmoidItem {
 
     readonly property bool inPanel: Plasmoid.formFactor === PlasmaCore.Types.Horizontal || Plasmoid.formFactor === PlasmaCore.Types.Vertical
     property bool popupAlive: !inPanel
-    readonly property bool viewVisible: root.expanded || !root.inPanel
+    readonly property bool viewVisible: root.inPanel ? root.expanded : root.visible
+    readonly property bool dataWanted: root.inPanel || root.visible
+    property bool locating: false
+    property int idleRateSamples: 90
+    property int rateSamples: 0
     readonly property bool wantsRates: root.viewVisible || (root.inPanel && Plasmoid.configuration.compactShow === "rates")
     property string tabKey: Plasmoid.configuration.rememberTab ? Plasmoid.configuration.currentTab : Plasmoid.configuration.defaultTab
     onTabKeyChanged: Plasmoid.configuration.currentTab = tabKey
@@ -166,7 +170,7 @@ PlasmoidItem {
     Timer {
         id: releasePopup
         interval: 1500
-        onTriggered: root.popupAlive = root.expanded || !root.inPanel
+        onTriggered: root.popupAlive = root.viewVisible
     }
 
     Timer {
@@ -721,6 +725,7 @@ PlasmoidItem {
 
     function locate(index) {
         if (index >= root.configCandidates.length) {
+            root.locating = false
             root.setupError = i18n("No Syncthing configuration was found. Set the address and API key in the widget settings.")
             return
         }
@@ -748,6 +753,7 @@ PlasmoidItem {
     }
 
     function applyEndpoint(url, key) {
+        root.locating = false
         var overrideUrl = String(plasmoid.configuration.serverUrl || "").trim().replace(/\/+$/, "")
         var overrideKey = String(plasmoid.configuration.apiKey || "").trim()
         root.baseUrl = overrideUrl !== "" ? overrideUrl : url
@@ -766,6 +772,7 @@ PlasmoidItem {
     }
 
     function connect() {
+        if (!root.dataWanted || root.locating) return
         root.setupError = ""
         var overrideUrl = String(plasmoid.configuration.serverUrl || "").trim().replace(/\/+$/, "")
         var overrideKey = String(plasmoid.configuration.apiKey || "").trim()
@@ -773,6 +780,7 @@ PlasmoidItem {
             root.applyEndpoint(overrideUrl, overrideKey)
             return
         }
+        root.locating = true
         root.locate(0)
     }
 
@@ -881,7 +889,10 @@ PlasmoidItem {
                 root.deviceRates = rates
                 History.push(root.history, "in", root.inRate)
                 History.push(root.history, "out", root.outRate)
-                ++root.tick
+                root.idleRateSamples = root.inRate === 0 && root.outRate === 0 ? root.idleRateSamples + 1 : 0
+                ++root.rateSamples
+                if (root.idleRateSamples <= root.history.len || root.rateSamples <= 2)
+                    ++root.tick
             }
             var totals = ({})
             for (var id in root.deviceConnections) {
@@ -1074,7 +1085,7 @@ PlasmoidItem {
     }
 
     function pollEvents() {
-        if (root.baseUrl === "" || root.apiKey === "") return
+        if (!root.dataWanted || root.baseUrl === "" || root.apiKey === "") return
         if (root.eventRequest || root.diskEventRequest) return
         var generation = root.eventGeneration
         root.requestEvents(false, root.lastEventId === 0, generation)
@@ -1153,7 +1164,7 @@ PlasmoidItem {
             : status === 0
                 ? i18n("Cannot reach %1", root.baseUrl)
                 : i18n("Syncthing returned HTTP %1", status)
-        reconnectTimer.restart()
+        if (root.dataWanted) reconnectTimer.restart()
     }
 
     function handleEvents(events) {
@@ -1530,18 +1541,28 @@ PlasmoidItem {
     }
     Component.onDestruction: root.stopEventStreams()
     onExpandedChanged: {
-        if (!root.expanded) {
+        if (root.inPanel && root.expanded && !Plasmoid.configuration.rememberTab) root.tabKey = Plasmoid.configuration.defaultTab
+    }
+    onDataWantedChanged: {
+        if (!root.dataWanted) {
+            reconnectTimer.stop()
+            root.stopEventStreams()
+            return
+        }
+        if (root.baseUrl === "" || root.apiKey === "")
+            root.connect()
+        else
+            root.pollEvents()
+    }
+    onViewVisibleChanged: {
+        if (!root.viewVisible) {
             if (root.inPanel) releasePopup.restart()
             return
         }
         releasePopup.stop()
         root.popupAlive = true
-        if (!Plasmoid.configuration.rememberTab) root.tabKey = Plasmoid.configuration.defaultTab
-        if (root.baseUrl === "" || root.apiKey === "") {
-            root.connect()
-            return
-        }
-        root.refreshAllData()
+        if (root.baseUrl !== "" && root.apiKey !== "")
+            root.refreshAllData()
     }
 
     Connections {
@@ -1633,7 +1654,7 @@ PlasmoidItem {
     Timer {
         interval: 60000
         repeat: true
-        running: root.reachable
+        running: root.reachable && root.dataWanted
         onTriggered: {
             ++root.clockTick
             root.checkOfflineDevices()

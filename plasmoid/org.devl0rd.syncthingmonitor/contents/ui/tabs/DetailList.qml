@@ -9,15 +9,17 @@ ColumnLayout {
 
     property var model: []
     property string query
+    readonly property var entries: visible ? model.filter(entry => entry.value !== undefined && entry.value !== "") : []
 
     Layout.fillWidth: true
     spacing: 3
 
     Repeater {
-        model: list.model.filter(entry => entry.value !== undefined && entry.value !== "")
+        model: list.entries.length
 
         RowLayout {
-            required property var modelData
+            required property int index
+            readonly property var modelData: list.entries[index] || ({})
             Layout.fillWidth: true
             spacing: Kirigami.Units.largeSpacing
 
@@ -29,8 +31,8 @@ ColumnLayout {
                 Layout.alignment: Qt.AlignTop
             }
             PlasmaComponents.Label {
-                text: Highlight.mark(modelData.value, list.query, Kirigami.Theme.highlightColor)
-                textFormat: Text.StyledText
+                text: list.query !== "" ? Highlight.mark(modelData.value, list.query, Kirigami.Theme.highlightColor) : modelData.value
+                textFormat: list.query !== "" ? Text.StyledText : Text.PlainText
                 color: modelData.color !== undefined ? modelData.color : Kirigami.Theme.textColor
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
                 font.features: { "tnum": 1 }

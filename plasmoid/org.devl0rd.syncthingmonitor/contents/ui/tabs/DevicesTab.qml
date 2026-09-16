@@ -56,10 +56,10 @@ PopScroll {
     }
 
     Repeater {
-        model: tab.shown
+        model: tab.shown.length
         DeviceRow {
-            required property var modelData
-            device: modelData
+            required property int index
+            device: tab.shown[index] || ({})
         }
     }
 

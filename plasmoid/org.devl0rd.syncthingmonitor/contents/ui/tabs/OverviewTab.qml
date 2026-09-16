@@ -95,10 +95,11 @@ PopScroll {
         border.color: Qt.alpha(Kirigami.Theme.negativeTextColor, 0.35)
 
         Repeater {
-            model: root.attentionItems.slice(0, 8)
+            model: Math.min(8, root.attentionCount)
 
             RowLayout {
-                required property var modelData
+                required property int index
+                readonly property var modelData: root.attentionItems[index] || ({})
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing * 1.5
 
@@ -220,10 +221,10 @@ PopScroll {
         icon: "document-edit"
 
         Repeater {
-            model: root.activity.slice(0, 4)
+            model: Math.min(4, root.activity.length)
             ActivityRow {
-                required property var modelData
-                entry: modelData
+                required property int index
+                entry: root.activity[index] || ({})
             }
         }
         PlasmaComponents.Button {

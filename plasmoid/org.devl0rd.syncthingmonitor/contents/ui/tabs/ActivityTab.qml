@@ -29,10 +29,10 @@ PopScroll {
     }
 
     Repeater {
-        model: tab.shown
+        model: tab.shown.length
         ActivityRow {
-            required property var modelData
-            entry: modelData
+            required property int index
+            entry: tab.shown[index] || ({})
         }
     }
 

@@ -11,5 +11,4 @@ Rectangle {
     height: diameter
     radius: diameter / 2
     color: root.colorForState(kind)
-    Behavior on color { ColorAnimation { duration: 280 } }
 }

@@ -40,10 +40,10 @@ PopScroll {
     }
 
     Repeater {
-        model: tab.shown
+        model: tab.shown.length
         FolderRow {
-            required property var modelData
-            folder: modelData
+            required property int index
+            folder: tab.shown[index] || ({})
         }
     }
 

@@ -66,8 +66,8 @@ MouseArea {
             PlasmaComponents.Label {
                 text: row.isDevice
                     ? i18n("%1 %2", root.activityDeviceText(row.entry), row.entry.action === "connected" ? i18n("connected") : i18n("disconnected"))
-                    : Highlight.mark(row.fileName, row.query, Kirigami.Theme.highlightColor)
-                textFormat: Text.StyledText
+                    : row.query !== "" ? Highlight.mark(row.fileName, row.query, Kirigami.Theme.highlightColor) : row.fileName
+                textFormat: row.query !== "" && !row.isDevice ? Text.StyledText : Text.PlainText
                 font.weight: Font.DemiBold
                 elide: Text.ElideMiddle
                 Layout.fillWidth: true
@@ -83,9 +83,9 @@ MouseArea {
                         const by = root.activityDeviceText(row.entry)
                         if (by !== "" && row.entry.kind === "remote") parts.push(i18n("by %1", by))
                     }
-                    return Highlight.mark(parts.join("  ·  "), row.query, Kirigami.Theme.highlightColor)
+                    return row.query !== "" ? Highlight.mark(parts.join("  ·  "), row.query, Kirigami.Theme.highlightColor) : parts.join("  ·  ")
                 }
-                textFormat: Text.StyledText
+                textFormat: row.query !== "" ? Text.StyledText : Text.PlainText
                 font: Kirigami.Theme.smallFont
                 opacity: 0.65
                 elide: Text.ElideMiddle

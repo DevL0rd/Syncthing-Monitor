@@ -27,13 +27,13 @@ Item {
         anchors.fill: parent
         active: root.popupAlive
         sourceComponent: shellComponent
-        onLoaded: if (root.expanded) item.focusSearch()
+        onLoaded: if (root.inPanel && root.expanded) item.focusSearch()
     }
 
     Connections {
         target: root
         function onExpandedChanged() {
-            if (root.expanded && loader.item)
+            if (root.inPanel && root.expanded && loader.item)
                 loader.item.focusSearch()
         }
     }

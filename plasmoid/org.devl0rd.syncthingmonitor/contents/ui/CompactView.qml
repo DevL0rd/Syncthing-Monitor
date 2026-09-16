@@ -38,6 +38,38 @@ MouseArea {
         text: "kB/s"
     }
 
+    component RateGroup: RowLayout {
+        property string arrow
+        property color arrowColor
+        property real rate
+        readonly property var parts: visible ? compact.rateParts(rate) : ({ number: "", unit: "" })
+        Layout.alignment: Qt.AlignCenter
+        spacing: 2
+        PlasmaComponents.Label {
+            text: parent.arrow
+            color: parent.arrowColor
+            font.pixelSize: compact.valueSize
+            font.weight: Font.Bold
+            Layout.alignment: Qt.AlignBaseline
+        }
+        PlasmaComponents.Label {
+            text: compact.connected ? parent.parts.number : "—"
+            horizontalAlignment: Text.AlignRight
+            Layout.minimumWidth: Math.ceil(rateMetrics.advanceWidth)
+            font.pixelSize: compact.valueSize * 0.9
+            font.weight: Font.DemiBold
+            font.features: { "tnum": 1 }
+            Layout.alignment: Qt.AlignBaseline
+        }
+        PlasmaComponents.Label {
+            text: compact.connected ? parent.parts.unit : ""
+            Layout.minimumWidth: Math.ceil(rateUnitMetrics.advanceWidth)
+            font.pixelSize: compact.valueSize * 0.68
+            opacity: 0.6
+            Layout.alignment: Qt.AlignBaseline
+        }
+    }
+
     function rateParts(value) {
         var text = root.formatBytes(value)
         var space = text.lastIndexOf(" ")
@@ -72,8 +104,8 @@ MouseArea {
         anchors.fill: parent
         anchors.margins: 3
         opacity: 0.35
-        values: root.series("in").slice(-40)
-        values2: root.series("out").slice(-40)
+        values: visible ? root.series("in").slice(-40) : []
+        values2: visible ? root.series("out").slice(-40) : []
         lineColor: root.downColor
         lineColor2: root.upColor
         gradient: false
@@ -111,7 +143,6 @@ MouseArea {
                 color: root.stateColor
                 border.width: 1.5
                 border.color: Kirigami.Theme.backgroundColor
-                Behavior on color { ColorAnimation { duration: 280 } }
             }
         }
 
@@ -133,7 +164,6 @@ MouseArea {
                 font.pixelSize: compact.valueSize
                 font.weight: Font.DemiBold
                 font.features: { "tnum": 1 }
-                Behavior on color { ColorAnimation { duration: 280 } }
             }
             Item {
                 Layout.fillWidth: true
@@ -148,45 +178,21 @@ MouseArea {
                     radius: 1
                     width: parent.width * (compact.connected ? root.overallPercent / 100 : 0)
                     color: root.stateColor
-                    Behavior on width { NumberAnimation { duration: 350; easing.type: Easing.OutCubic } }
                 }
             }
         }
 
-        Repeater {
-            model: compact.showRates ? [
-                { arrow: "↓", parts: compact.rateParts(root.inRate), color: root.downColor },
-                { arrow: "↑", parts: compact.rateParts(root.outRate), color: root.upColor }
-            ] : []
-
-            RowLayout {
-                required property var modelData
-                Layout.alignment: Qt.AlignCenter
-                spacing: 2
-                PlasmaComponents.Label {
-                    text: modelData.arrow
-                    color: modelData.color
-                    font.pixelSize: compact.valueSize
-                    font.weight: Font.Bold
-                    Layout.alignment: Qt.AlignBaseline
-                }
-                PlasmaComponents.Label {
-                    text: compact.connected ? modelData.parts.number : "—"
-                    horizontalAlignment: Text.AlignRight
-                    Layout.minimumWidth: Math.ceil(rateMetrics.advanceWidth)
-                    font.pixelSize: compact.valueSize * 0.9
-                    font.weight: Font.DemiBold
-                    font.features: { "tnum": 1 }
-                    Layout.alignment: Qt.AlignBaseline
-                }
-                PlasmaComponents.Label {
-                    text: compact.connected ? modelData.parts.unit : ""
-                    Layout.minimumWidth: Math.ceil(rateUnitMetrics.advanceWidth)
-                    font.pixelSize: compact.valueSize * 0.68
-                    opacity: 0.6
-                    Layout.alignment: Qt.AlignBaseline
-                }
-            }
+        RateGroup {
+            visible: compact.showRates
+            arrow: "↓"
+            arrowColor: root.downColor
+            rate: root.inRate
+        }
+        RateGroup {
+            visible: compact.showRates
+            arrow: "↑"
+            arrowColor: root.upColor
+            rate: root.outRate
         }
     }
 }

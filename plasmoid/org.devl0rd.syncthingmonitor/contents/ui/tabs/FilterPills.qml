@@ -14,11 +14,12 @@ Flow {
     spacing: Kirigami.Units.smallSpacing
 
     Repeater {
-        model: pills.model
+        model: pills.model.length
 
         MouseArea {
             id: pill
-            required property var modelData
+            required property int index
+            readonly property var modelData: pills.model[index] || ({})
             readonly property bool active: modelData.key === pills.current
             visible: modelData.visible === undefined || modelData.visible
             width: pillRow.implicitWidth + Kirigami.Units.smallSpacing * 4

@@ -28,7 +28,6 @@ Rectangle {
          : Qt.alpha(Kirigami.Theme.textColor, expanded ? 0.075 : mouse.containsMouse ? 0.06 : 0.04)
     border.width: 1
     border.color: expanded ? Qt.alpha(Kirigami.Theme.highlightColor, 0.45) : Qt.alpha(Kirigami.Theme.textColor, 0.07)
-    Behavior on color { ColorAnimation { duration: 150 } }
     clip: true
 
     MouseArea {
@@ -74,8 +73,8 @@ Rectangle {
                 Layout.fillWidth: true
                 spacing: 0
                 PlasmaComponents.Label {
-                    text: Highlight.mark(row.device.name || row.deviceId.slice(0, 7), row.query, Kirigami.Theme.highlightColor)
-                    textFormat: Text.StyledText
+                    text: row.query !== "" ? Highlight.mark(row.device.name || row.deviceId.slice(0, 7), row.query, Kirigami.Theme.highlightColor) : row.device.name || row.deviceId.slice(0, 7)
+                    textFormat: row.query !== "" ? Text.StyledText : Text.PlainText
                     font.weight: Font.DemiBold
                     elide: Text.ElideRight
                     Layout.fillWidth: true
@@ -129,36 +128,41 @@ Rectangle {
             thickness: 4
         }
 
-        DetailList {
-            visible: row.expanded
-            Layout.topMargin: Kirigami.Units.smallSpacing
-            query: row.query
-            model: [
-                { label: i18n("Address"), value: row.connection.address ? i18n("%1 · %2", row.connection.address, row.connection.type || "") : "" },
-                { label: i18n("Version"), value: row.connection.clientVersion || "" },
-                { label: i18n("Encryption"), value: row.connection.crypto || "" },
-                { label: i18n("Transferred"), value: i18n("%1 in · %2 out", root.formatBytes(row.connection.inBytesTotal), root.formatBytes(row.connection.outBytesTotal)) },
-                { label: i18n("Connected since"), value: row.connected && root.validTimestamp(row.connection.startedAt) ? root.formatWhen(row.connection.startedAt) : "" },
-                { label: i18n("In sync"), value: row.percent >= 0 ? i18n("%1%", Math.floor(row.percent)) : "" },
-                { label: i18n("Remaining"), value: Number(row.completion.needItems || 0) + Number(row.completion.needDeletes || 0) > 0
-                    ? i18n("%1 · %2 items", root.formatBytes(row.completion.needBytes), root.formatNumber(Number(row.completion.needItems || 0) + Number(row.completion.needDeletes || 0))) : "" },
-                { label: i18n("Last seen"), value: root.validTimestamp(row.stats.lastSeen) ? root.formatWhen(row.stats.lastSeen) : i18n("never") },
-                { label: i18n("Last connection"), value: Number(row.stats.lastConnectionDurationS || 0) > 0 ? root.formatDuration(row.stats.lastConnectionDurationS) : "" },
-                { label: i18n("Shared folders"), value: row.sharedFolders.length > 0 ? row.sharedFolders.join(", ") : i18n("none"), wrap: true },
-                { label: i18n("Addresses"), value: (row.device.addresses || []).join(", "), wrap: true },
-                { label: i18n("Device ID"), value: row.deviceId, wrap: true }
-            ]
-        }
-
-        PopActions {
-            visible: row.expanded
-            Layout.topMargin: Kirigami.Units.smallSpacing
-            model: [
-                { icon: row.device.paused ? "media-playback-start" : "media-playback-pause", text: row.device.paused ? i18n("Resume") : i18n("Pause"),
-                  run: () => root.setDevicePaused(row.deviceId, !row.device.paused) },
-                { icon: "edit-copy", text: i18n("Copy device ID"), run: () => root.copy(row.deviceId) },
-                { icon: "internet-web-browser", text: i18n("Edit in web UI"), run: () => root.openWebInterface() }
-            ]
+        Loader {
+            Layout.fillWidth: true
+            active: row.expanded
+            visible: active
+            sourceComponent: Component {
+                ColumnLayout {
+                    spacing: Kirigami.Units.smallSpacing
+                    DetailList {
+                        query: row.query
+                        model: [
+                            { label: i18n("Address"), value: row.connection.address ? i18n("%1 · %2", row.connection.address, row.connection.type || "") : "" },
+                            { label: i18n("Version"), value: row.connection.clientVersion || "" },
+                            { label: i18n("Encryption"), value: row.connection.crypto || "" },
+                            { label: i18n("Transferred"), value: i18n("%1 in · %2 out", root.formatBytes(row.connection.inBytesTotal), root.formatBytes(row.connection.outBytesTotal)) },
+                            { label: i18n("Connected since"), value: row.connected && root.validTimestamp(row.connection.startedAt) ? root.formatWhen(row.connection.startedAt) : "" },
+                            { label: i18n("In sync"), value: row.percent >= 0 ? i18n("%1%", Math.floor(row.percent)) : "" },
+                            { label: i18n("Remaining"), value: Number(row.completion.needItems || 0) + Number(row.completion.needDeletes || 0) > 0
+                                ? i18n("%1 · %2 items", root.formatBytes(row.completion.needBytes), root.formatNumber(Number(row.completion.needItems || 0) + Number(row.completion.needDeletes || 0))) : "" },
+                            { label: i18n("Last seen"), value: root.validTimestamp(row.stats.lastSeen) ? root.formatWhen(row.stats.lastSeen) : i18n("never") },
+                            { label: i18n("Last connection"), value: Number(row.stats.lastConnectionDurationS || 0) > 0 ? root.formatDuration(row.stats.lastConnectionDurationS) : "" },
+                            { label: i18n("Shared folders"), value: row.sharedFolders.length > 0 ? row.sharedFolders.join(", ") : i18n("none"), wrap: true },
+                            { label: i18n("Addresses"), value: (row.device.addresses || []).join(", "), wrap: true },
+                            { label: i18n("Device ID"), value: row.deviceId, wrap: true }
+                        ]
+                    }
+                    PopActions {
+                        model: [
+                            { icon: row.device.paused ? "media-playback-start" : "media-playback-pause", text: row.device.paused ? i18n("Resume") : i18n("Pause"),
+                              run: () => root.setDevicePaused(row.deviceId, !row.device.paused) },
+                            { icon: "edit-copy", text: i18n("Copy device ID"), run: () => root.copy(row.deviceId) },
+                            { icon: "internet-web-browser", text: i18n("Edit in web UI"), run: () => root.openWebInterface() }
+                        ]
+                    }
+                }
+            }
         }
     }
 }
