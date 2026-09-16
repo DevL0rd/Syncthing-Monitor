@@ -9,6 +9,9 @@ import org.kde.notification as KNotifications
 import org.kde.plasma.components as PlasmaComponents
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.plasmoid
+import "lib"
+import "lib/History.js" as History
+import "lib/PopStyle.js" as Style
 
 PlasmoidItem {
     id: root
@@ -55,9 +58,6 @@ PlasmoidItem {
     property real diskEventRequestStartedAt: 0
     property int eventGeneration: 0
     property var remoteDownloadActivity: ({})
-    property bool completionTrackingReady: false
-    property bool completionPulseActive: false
-    property bool completionPulsePending: false
     property string openFolder: ""
     property string openDevice: ""
     property var pendingFolders: ({})
@@ -78,11 +78,28 @@ PlasmoidItem {
     property var offlineStates: ({})
     property var recentFailureNotifications: ({})
     property int clockTick: 0
+    property var deviceRates: ({})
+    property var lastDeviceTotals: ({})
+    property var history: History.make(90)
+    property int tick: 0
+    property var activity: []
+    readonly property int activityLimit: 200
+
+    readonly property bool inPanel: Plasmoid.formFactor === PlasmaCore.Types.Horizontal || Plasmoid.formFactor === PlasmaCore.Types.Vertical
+    property bool popupAlive: !inPanel
+    readonly property bool viewVisible: root.expanded || !root.inPanel
+    readonly property bool wantsRates: root.viewVisible || (root.inPanel && Plasmoid.configuration.compactShow === "rates")
+    property string tabKey: Plasmoid.configuration.rememberTab ? Plasmoid.configuration.currentTab : Plasmoid.configuration.defaultTab
+    onTabKeyChanged: Plasmoid.configuration.currentTab = tabKey
+
+    property string message
+    property bool messageError: false
 
     readonly property int failureNotificationCooldownMs: 5 * 60 * 1000
 
     readonly property var remoteDevices: root.devices.filter(function(device) { return device.deviceID !== root.myId })
     readonly property int connectedDevices: root.countConnectedDevices()
+    readonly property int upToDateFolders: root.countFolders("ok")
     readonly property int errorFolders: root.countFolders("error")
     readonly property int busyFolders: root.countFolders("busy")
     readonly property int activelySyncingFolders: root.countFoldersActivelySyncing()
@@ -116,31 +133,14 @@ PlasmoidItem {
         : "ok"
 
     readonly property color stateColor: root.colorForState(root.overallState)
-
-    onOverallStateChanged: {
-        if (!root.completionTrackingReady) return
-        if (root.overallState === "error" || root.overallState === "offline"
-                || root.overallState === "setup" || root.overallState === "paused") {
-            root.cancelCompletionPulse()
-            return
-        }
-        root.maybeStartCompletionPulse()
-    }
-    onWorkActiveChanged: {
-        if (!root.completionTrackingReady) return
-        if (root.workActive && root.completionPulseActive) {
-            root.completionPulseActive = false
-            completionPulseTimer.stop()
-        } else if (!root.workActive) {
-            root.maybeStartCompletionPulse()
-        }
-    }
+    readonly property color downColor: Style.hue("down", Kirigami.Theme)
+    readonly property color upColor: Style.hue("up", Kirigami.Theme)
 
     Plasmoid.icon: "folder-sync"
     Plasmoid.title: i18n("Syncthing Monitor")
     toolTipMainText: root.overallTitle()
     toolTipSubText: root.overallSubtitle()
-    preferredRepresentation: compactRepresentation
+    preferredRepresentation: inPanel ? compactRepresentation : fullRepresentation
 
     Plasmoid.contextualActions: [
         PlasmaCore.Action {
@@ -162,6 +162,140 @@ PlasmoidItem {
             onTriggered: root.requestGlobalPause(!root.allDevicesPaused)
         }
     ]
+
+    Timer {
+        id: releasePopup
+        interval: 1500
+        onTriggered: root.popupAlive = root.expanded || !root.inPanel
+    }
+
+    Timer {
+        id: messageTimer
+        interval: 4000
+        onTriggered: root.message = ""
+    }
+
+    function flashMessage(text, isError) {
+        root.message = text
+        root.messageError = isError === true
+        messageTimer.restart()
+    }
+
+    TextEdit { id: clipboard; visible: false }
+
+    function copy(text) {
+        clipboard.text = text
+        clipboard.selectAll()
+        clipboard.copy()
+        root.flashMessage(i18n("Copied %1", text.length > 48 ? text.slice(0, 45) + "…" : text), false)
+    }
+
+    function series(key) {
+        var tick = root.tick
+        return History.values(root.history, key)
+    }
+
+    function foldersSharedWith(deviceId) {
+        var names = []
+        for (var i = 0; i < root.folders.length; ++i) {
+            var shared = root.folders[i].devices || []
+            for (var j = 0; j < shared.length; ++j) {
+                if (shared[j].deviceID === deviceId) {
+                    names.push(root.folders[i].label || root.folders[i].id)
+                    break
+                }
+            }
+        }
+        return names
+    }
+
+    function devicesSharingFolder(folder) {
+        var names = []
+        var shared = (folder && folder.devices) || []
+        for (var i = 0; i < shared.length; ++i) {
+            if (shared[i].deviceID === root.myId) continue
+            names.push(root.deviceName(shared[i].deviceID))
+        }
+        return names
+    }
+
+    function activityEntry(event) {
+        var data = event.data || ({})
+        switch (event.type) {
+        case "LocalChangeDetected":
+        case "RemoteChangeDetected":
+            return {
+                id: "d" + event.id,
+                time: event.time,
+                kind: event.type === "LocalChangeDetected" ? "local" : "remote",
+                action: data.action || "modified",
+                itemType: data.type || "file",
+                folder: data.folder || data.folderID || "",
+                label: data.label || data.folder || "",
+                path: data.path || "",
+                device: data.modifiedBy || ""
+            }
+        case "DeviceConnected":
+        case "DeviceDisconnected":
+            return {
+                id: "e" + event.id,
+                time: event.time,
+                kind: "device",
+                action: event.type === "DeviceConnected" ? "connected" : "disconnected",
+                itemType: "device",
+                folder: "",
+                label: "",
+                path: data.addr || data.address || "",
+                device: data.id || data.device || ""
+            }
+        }
+        return null
+    }
+
+    function recordActivity(events) {
+        var added = []
+        for (var i = events.length - 1; i >= 0; --i) {
+            var entry = root.activityEntry(events[i])
+            if (entry) added.push(entry)
+        }
+        if (added.length === 0) return
+        root.activity = added.concat(root.activity).slice(0, root.activityLimit)
+    }
+
+    function activityActionText(entry) {
+        switch (entry.action) {
+        case "added": return i18n("Added")
+        case "deleted": return i18n("Deleted")
+        case "connected": return i18n("Connected")
+        case "disconnected": return i18n("Disconnected")
+        default: return i18n("Modified")
+        }
+    }
+
+    function activityDeviceText(entry) {
+        if (!entry.device) return ""
+        if (root.myId !== "" && root.myId.indexOf(entry.device) === 0) return i18n("this device")
+        for (var i = 0; i < root.devices.length; ++i)
+            if (root.devices[i].deviceID.indexOf(entry.device) === 0)
+                return root.devices[i].name || entry.device
+        return entry.device
+    }
+
+    function openActivityLocation(entry) {
+        var folder = root.folderById(entry.folder)
+        if (!folder) return
+        var relative = String(entry.path || "")
+        var directory = entry.action === "deleted" || entry.itemType !== "dir"
+            ? relative.substring(0, relative.lastIndexOf("/"))
+            : relative
+        var base = root.expandPath(folder.path).replace(/\/+$/, "")
+        Qt.openUrlExternally("file://" + (directory !== "" ? base + "/" + directory : base))
+    }
+
+    function middleClick() {
+        root.rescanAll()
+        root.flashMessage(i18n("Rescanning every folder"), false)
+    }
 
     function urlToPath(value) {
         return String(value).replace(/^file:\/\//, "")
@@ -281,15 +415,10 @@ PlasmoidItem {
         return false
     }
 
-    function applyRemoteDownloadProgress(data, notifyCompletion) {
+    function applyRemoteDownloadProgress(data) {
         var device = String(data.device || "")
         var folder = String(data.folder || "")
         if (device === "" || folder === "") return
-        var hadActivity = false
-        for (var existingKey in root.remoteDownloadActivity) {
-            hadActivity = true
-            break
-        }
         var activityKey = device + "\u001f" + folder
         var next = ({})
         for (var key in root.remoteDownloadActivity) {
@@ -301,14 +430,6 @@ PlasmoidItem {
             break
         }
         root.remoteDownloadActivity = next
-        if (notifyCompletion && hadActivity) {
-            var hasActivity = false
-            for (var remainingKey in next) {
-                hasActivity = true
-                break
-            }
-            if (!hasActivity) root.markWorkCompleted()
-        }
     }
 
     function clearRemoteDownloadActivity(device, folder) {
@@ -329,7 +450,7 @@ PlasmoidItem {
             var data = event.data || ({})
             switch (event.type) {
             case "RemoteDownloadProgress":
-                root.applyRemoteDownloadProgress(data, false)
+                root.applyRemoteDownloadProgress(data)
                 break
             case "DeviceDisconnected":
             case "DevicePaused":
@@ -343,27 +464,6 @@ PlasmoidItem {
                 break
             }
         }
-    }
-
-    function markWorkCompleted() {
-        if (!root.completionTrackingReady) return
-        if (root.overallState === "error" || root.overallState === "offline"
-                || root.overallState === "setup" || root.overallState === "paused") return
-        root.completionPulsePending = true
-        root.maybeStartCompletionPulse()
-    }
-
-    function maybeStartCompletionPulse() {
-        if (!root.completionPulsePending || root.workActive || root.overallState !== "ok") return
-        root.completionPulsePending = false
-        root.completionPulseActive = true
-        completionPulseTimer.restart()
-    }
-
-    function cancelCompletionPulse() {
-        root.completionPulsePending = false
-        root.completionPulseActive = false
-        completionPulseTimer.stop()
     }
 
     function sumStatus(key) {
@@ -458,6 +558,7 @@ PlasmoidItem {
             var errors = root.folderErrors[folder.id] || []
             if (root.folderState(folder.id) === "error" || errors.length > 0) {
                 items.push({
+                    id: folder.id,
                     kind: "folder",
                     icon: "folder-sync",
                     title: folder.label || folder.id,
@@ -740,7 +841,7 @@ PlasmoidItem {
                 root.folderNeedItems = root.withEntry(root.folderNeedItems, id, [])
                 root.folderNeedLoading = root.withEntry(root.folderNeedLoading, id, false)
             }
-            if (root.expanded && root.openFolder === id && root.folderState(id) === "busy")
+            if (root.viewVisible && root.openFolder === id && root.folderState(id) === "busy")
                 root.refreshFolderNeed(id)
             root.evaluateSyncState()
         })
@@ -764,6 +865,30 @@ PlasmoidItem {
                 root.inRate = Math.max(0, (Number(total.inBytesTotal || 0) - root.sampledIn) / span)
                 root.outRate = Math.max(0, (Number(total.outBytesTotal || 0) - root.sampledOut) / span)
             }
+            if (root.sampledAt > 0 && now > root.sampledAt) {
+                var elapsed = (now - root.sampledAt) / 1000
+                var rates = ({})
+                for (var deviceId in root.deviceConnections) {
+                    var connection = root.deviceConnections[deviceId] || ({})
+                    var previous = root.lastDeviceTotals[deviceId]
+                    rates[deviceId] = previous && connection.connected
+                        ? {
+                            inRate: Math.max(0, (Number(connection.inBytesTotal || 0) - previous.inBytes) / elapsed),
+                            outRate: Math.max(0, (Number(connection.outBytesTotal || 0) - previous.outBytes) / elapsed)
+                        }
+                        : { inRate: 0, outRate: 0 }
+                }
+                root.deviceRates = rates
+                History.push(root.history, "in", root.inRate)
+                History.push(root.history, "out", root.outRate)
+                ++root.tick
+            }
+            var totals = ({})
+            for (var id in root.deviceConnections) {
+                var current = root.deviceConnections[id] || ({})
+                totals[id] = { inBytes: Number(current.inBytesTotal || 0), outBytes: Number(current.outBytesTotal || 0) }
+            }
+            root.lastDeviceTotals = totals
             root.sampledIn = Number(total.inBytesTotal || 0)
             root.sampledOut = Number(total.outBytesTotal || 0)
             root.sampledAt = now
@@ -961,7 +1086,7 @@ PlasmoidItem {
         var cursor = root.eventCursor(diskEvents)
         var endpoint = diskEvents ? "/rest/events/disk" : "/rest/events"
         var query = bootstrap
-            ? "?since=0&limit=" + (diskEvents ? 1 : 256) + "&timeout=0"
+            ? "?since=0&limit=" + (diskEvents ? 100 : 256) + "&timeout=0"
             : "?since=" + cursor + "&timeout=55"
         var request = new XMLHttpRequest()
         root.setEventStreamRequest(diskEvents, request)
@@ -990,6 +1115,7 @@ PlasmoidItem {
                     if (events.length > 0) {
                         root.setEventCursor(diskEvents, Number(events[events.length - 1].id || 0))
                         if (!diskEvents) root.restoreRemoteDownloadActivity(events)
+                        root.recordActivity(events)
                     }
                 } else {
                     if (events.length > 0) {
@@ -1003,6 +1129,7 @@ PlasmoidItem {
                             newestId = Math.max(newestId, currentId)
                         }
                         root.setEventCursor(diskEvents, newestId)
+                        root.recordActivity(events)
                         root.handleEvents(events)
                     }
                 }
@@ -1056,7 +1183,6 @@ PlasmoidItem {
             break
             case "StateChanged":
                 if (data.folder && data.to) root.applyFolderState(data.folder, data.to)
-                if (data.from && data.from !== "idle" && data.to === "idle") root.markWorkCompleted()
                 root.queueFolderEventRefresh(event.type, data)
                 break
             case "FolderScanProgress":
@@ -1121,7 +1247,7 @@ PlasmoidItem {
                 root.pendingConfig = true
                 break
             case "RemoteDownloadProgress":
-                root.applyRemoteDownloadProgress(data, true)
+                root.applyRemoteDownloadProgress(data)
                 root.pendingCompletion = true
                 break
             case "ClusterConfigReceived":
@@ -1400,12 +1526,17 @@ PlasmoidItem {
     }
 
     Component.onCompleted: {
-        root.completionTrackingReady = true
         root.connect()
     }
     Component.onDestruction: root.stopEventStreams()
     onExpandedChanged: {
-        if (!root.expanded) return
+        if (!root.expanded) {
+            if (root.inPanel) releasePopup.restart()
+            return
+        }
+        releasePopup.stop()
+        root.popupAlive = true
+        if (!Plasmoid.configuration.rememberTab) root.tabKey = Plasmoid.configuration.defaultTab
         if (root.baseUrl === "" || root.apiKey === "") {
             root.connect()
             return
@@ -1425,6 +1556,9 @@ PlasmoidItem {
 
     function reconnect() {
         reconnectTimer.stop()
+        root.activity = []
+        root.deviceRates = ({})
+        root.lastDeviceTotals = ({})
         root.stopEventStreams()
         root.lastEventId = 0
         root.lastDiskEventId = 0
@@ -1470,12 +1604,6 @@ PlasmoidItem {
     }
 
     Timer {
-        id: completionPulseTimer
-        interval: 10000
-        onTriggered: root.completionPulseActive = false
-    }
-
-    Timer {
         id: reconnectTimer
         interval: 1000
         onTriggered: root.connect()
@@ -1497,7 +1625,8 @@ PlasmoidItem {
         id: rateTimer
         interval: 2000
         repeat: true
-        running: root.expanded && root.reachable
+        running: root.wantsRates && root.reachable
+        triggeredOnStart: true
         onTriggered: root.refreshConnections()
     }
 
@@ -1508,7 +1637,7 @@ PlasmoidItem {
         onTriggered: {
             ++root.clockTick
             root.checkOfflineDevices()
-            if (root.expanded) {
+            if (root.viewVisible) {
                 root.refreshSystem()
                 root.refreshStats()
                 root.refreshDeviceStats()
@@ -1517,798 +1646,6 @@ PlasmoidItem {
         }
     }
 
-    compactRepresentation: MouseArea {
-        id: compact
-        implicitWidth: Kirigami.Units.gridUnit * 1.5
-        implicitHeight: Kirigami.Units.gridUnit * 1.5
-        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
-        onClicked: function(mouse) {
-            if (mouse.button === Qt.MiddleButton) root.rescanAll()
-            else root.expanded = !root.expanded
-        }
-
-        Kirigami.Icon {
-            id: trayIcon
-            anchors.fill: parent
-            anchors.margins: Math.round(Math.min(parent.width, parent.height) * 0.1)
-            source: "folder-sync"
-            opacity: root.overallState === "offline" || root.overallState === "setup" ? 0.55 : 1
-        }
-
-        Rectangle {
-            id: statusDot
-            readonly property int diameter: Math.max(6, Math.round(Math.min(compact.width, compact.height) * 0.36))
-            width: diameter
-            height: diameter
-            radius: diameter / 2
-            anchors.right: trayIcon.right
-            anchors.bottom: trayIcon.bottom
-            color: root.stateColor
-            border.width: Math.max(1, Math.round(diameter * 0.16))
-            border.color: Qt.alpha(Kirigami.Theme.backgroundColor, 0.9)
-
-            SequentialAnimation on opacity {
-                running: root.overallState === "syncing" || root.completionPulseActive
-                loops: Animation.Infinite
-                alwaysRunToEnd: true
-                NumberAnimation { to: 0.3; duration: 750; easing.type: Easing.InOutQuad }
-                NumberAnimation { to: 1.0; duration: 750; easing.type: Easing.InOutQuad }
-            }
-        }
-    }
-
-    component StatusDot: Rectangle {
-        required property string state
-        property int diameter: Kirigami.Units.gridUnit * 0.5
-        width: diameter
-        height: diameter
-        radius: diameter / 2
-        color: root.colorForState(state)
-
-        SequentialAnimation on opacity {
-            running: parent.state === "busy"
-            loops: Animation.Infinite
-            alwaysRunToEnd: true
-            NumberAnimation { to: 0.3; duration: 750; easing.type: Easing.InOutQuad }
-            NumberAnimation { to: 1.0; duration: 750; easing.type: Easing.InOutQuad }
-        }
-    }
-
-    component StatTile: Item {
-        id: tile
-        property string label: ""
-        property string value: ""
-        property string iconName: ""
-        property color valueColor: Kirigami.Theme.textColor
-        Layout.fillWidth: true
-        Layout.minimumWidth: 0
-        Layout.preferredWidth: 1
-        implicitHeight: tileContent.implicitHeight
-
-        ColumnLayout {
-            id: tileContent
-            anchors.fill: parent
-            spacing: 0
-
-            RowLayout {
-                Layout.alignment: Qt.AlignHCenter
-                spacing: Kirigami.Units.smallSpacing
-                Kirigami.Icon {
-                    visible: tile.iconName !== ""
-                    source: tile.iconName
-                    color: tile.valueColor
-                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                }
-                PlasmaComponents.Label {
-                    text: tile.value
-                    color: tile.valueColor
-                    font.weight: Font.DemiBold
-                }
-            }
-            PlasmaComponents.Label {
-                text: tile.label
-                font: Kirigami.Theme.smallFont
-                opacity: 0.65
-                horizontalAlignment: Text.AlignHCenter
-                Layout.fillWidth: true
-            }
-        }
-    }
-
-    component SectionHeader: RowLayout {
-        id: header
-        property string title: ""
-        default property alias trailing: trailingRow.data
-        Layout.fillWidth: true
-        Layout.topMargin: Kirigami.Units.smallSpacing
-        spacing: Kirigami.Units.smallSpacing
-        PlasmaComponents.Label {
-            text: header.title
-            font.pointSize: Kirigami.Theme.smallFont.pointSize
-            font.capitalization: Font.AllUppercase
-            font.weight: Font.Bold
-            opacity: 0.6
-        }
-        Kirigami.Separator { Layout.fillWidth: true; Layout.alignment: Qt.AlignVCenter }
-        RowLayout { id: trailingRow; spacing: 0 }
-    }
-
-    component DetailRow: RowLayout {
-        id: detail
-        property string label: ""
-        property string value: ""
-        Layout.fillWidth: true
-        spacing: Kirigami.Units.largeSpacing
-        PlasmaComponents.Label {
-            text: detail.label
-            font: Kirigami.Theme.smallFont
-            opacity: 0.6
-        }
-        PlasmaComponents.Label {
-            text: detail.value
-            font: Kirigami.Theme.smallFont
-            horizontalAlignment: Text.AlignRight
-            elide: Text.ElideMiddle
-            Layout.fillWidth: true
-        }
-    }
-
-    component RowCard: Rectangle {
-        id: card
-        property bool current: false
-        default property alias content: body.data
-        Layout.fillWidth: true
-        implicitHeight: body.implicitHeight + Kirigami.Units.smallSpacing * 2
-        radius: Kirigami.Units.smallSpacing
-        color: hoverHandler.hovered || card.current
-            ? Qt.alpha(Kirigami.Theme.textColor, 0.07)
-            : "transparent"
-        HoverHandler { id: hoverHandler }
-        Behavior on implicitHeight { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
-        ColumnLayout {
-            id: body
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: Kirigami.Units.smallSpacing
-            spacing: Kirigami.Units.smallSpacing
-        }
-    }
-
-    fullRepresentation: Item {
-        Layout.minimumWidth: Kirigami.Units.gridUnit * 22
-        Layout.preferredWidth: Kirigami.Units.gridUnit * 26
-        Layout.minimumHeight: Kirigami.Units.gridUnit * 20
-        Layout.preferredHeight: Kirigami.Units.gridUnit * 32
-
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: Kirigami.Units.largeSpacing
-            spacing: Kirigami.Units.smallSpacing
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: Kirigami.Units.largeSpacing
-
-                Item {
-                    Layout.preferredWidth: Kirigami.Units.iconSizes.large
-                    Layout.preferredHeight: Kirigami.Units.iconSizes.large
-                    Kirigami.Icon {
-                        id: headerIcon
-                        anchors.fill: parent
-                        source: "folder-sync"
-                    }
-                    Rectangle {
-                        readonly property int diameter: Math.round(headerIcon.height * 0.36)
-                        width: diameter
-                        height: diameter
-                        radius: diameter / 2
-                        anchors.right: headerIcon.right
-                        anchors.bottom: headerIcon.bottom
-                        color: root.stateColor
-                        border.width: 2
-                        border.color: Qt.alpha(Kirigami.Theme.backgroundColor, 0.9)
-                    }
-                }
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 0
-                    PlasmaComponents.Label {
-                        text: root.overallTitle()
-                        font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.15
-                        font.weight: Font.Bold
-                        color: root.overallState === "error" || root.overallState === "offline" || root.overallState === "setup"
-                            ? Kirigami.Theme.negativeTextColor
-                            : Kirigami.Theme.textColor
-                        elide: Text.ElideRight
-                        Layout.fillWidth: true
-                    }
-                    PlasmaComponents.Label {
-                        text: root.overallSubtitle()
-                        font: Kirigami.Theme.smallFont
-                        opacity: 0.7
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                    }
-                }
-
-                QQC2.ToolButton {
-                    icon.name: root.allDevicesPaused ? "media-playback-start" : "media-playback-pause"
-                    enabled: root.reachable && root.remoteDevices.length > 0 && !root.globalActionPending
-                    onClicked: root.requestGlobalPause(!root.allDevicesPaused)
-                    Layout.alignment: Qt.AlignTop
-                    Accessible.name: root.allDevicesPaused ? i18n("Resume all devices") : i18n("Pause all devices")
-                    QQC2.ToolTip.visible: hovered
-                    QQC2.ToolTip.delay: 400
-                    QQC2.ToolTip.text: Accessible.name
-                }
-
-                QQC2.ToolButton {
-                    icon.name: "internet-web-browser"
-                    enabled: root.baseUrl !== ""
-                    onClicked: root.openWebInterface()
-                    Layout.alignment: Qt.AlignTop
-                    Accessible.name: i18n("Open the Syncthing web interface")
-                    QQC2.ToolTip.visible: hovered
-                    QQC2.ToolTip.delay: 400
-                    QQC2.ToolTip.text: i18n("Open the Syncthing web interface")
-                }
-            }
-
-            QQC2.ProgressBar {
-                visible: root.overallState === "syncing" && root.totalNeedBytes > 0
-                from: 0
-                to: 100
-                value: root.overallPercent
-                Layout.fillWidth: true
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.topMargin: Kirigami.Units.smallSpacing
-                Layout.bottomMargin: Kirigami.Units.smallSpacing
-                spacing: 0
-                StatTile {
-                    iconName: "go-down"
-                    value: root.formatRate(root.inRate)
-                    label: i18n("Download")
-                }
-                StatTile {
-                    iconName: "go-up"
-                    value: root.formatRate(root.outRate)
-                    label: i18n("Upload")
-                }
-                StatTile {
-                    iconName: "drive-harddisk"
-                    value: root.formatBytes(root.totalLocalBytes)
-                    label: i18n("Local data")
-                }
-                StatTile {
-                    iconName: root.attentionCount > 0 ? "dialog-warning" : "checkmark"
-                    value: root.attentionCount > 0
-                        ? root.formatNumber(root.attentionCount)
-                        : root.totalNeedItems > 0 ? root.formatNumber(root.totalNeedItems) : "0"
-                    valueColor: root.attentionCount > 0
-                        ? Kirigami.Theme.negativeTextColor
-                        : root.totalNeedItems > 0 ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.textColor
-                    label: root.attentionCount > 0 ? i18n("Attention") : i18n("Pending")
-                }
-            }
-
-            PlasmaComponents.Label {
-                visible: root.setupError !== "" || (!root.reachable && root.lastError !== "")
-                text: root.setupError !== "" ? root.setupError : root.lastError
-                color: Kirigami.Theme.negativeTextColor
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-
-            QQC2.ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                contentWidth: availableWidth
-                QQC2.ScrollBar.horizontal.policy: QQC2.ScrollBar.AlwaysOff
-
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 0
-
-                    SectionHeader {
-                        visible: root.attentionCount > 0
-                        title: i18n("Needs attention")
-                    }
-
-                    Repeater {
-                        model: root.attentionItems.slice(0, 6)
-                        delegate: RowCard {
-                            required property var modelData
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: Kirigami.Units.smallSpacing
-
-                                Kirigami.Icon {
-                                    source: modelData.icon
-                                    color: Kirigami.Theme.negativeTextColor
-                                    Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
-                                    Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
-                                    Layout.alignment: Qt.AlignTop
-                                }
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 0
-                                    PlasmaComponents.Label {
-                                        text: modelData.title
-                                        font.weight: Font.DemiBold
-                                        color: Kirigami.Theme.negativeTextColor
-                                        elide: Text.ElideRight
-                                        Layout.fillWidth: true
-                                    }
-                                    PlasmaComponents.Label {
-                                        text: modelData.detail
-                                        font: Kirigami.Theme.smallFont
-                                        opacity: 0.75
-                                        wrapMode: Text.Wrap
-                                        Layout.fillWidth: true
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    PlasmaComponents.Label {
-                        readonly property int extraAttention: root.attentionCount - 6
-                        visible: extraAttention > 0
-                        text: i18np("%1 more item needs attention", "%1 more items need attention", extraAttention)
-                        font: Kirigami.Theme.smallFont
-                        opacity: 0.65
-                        Layout.fillWidth: true
-                        Layout.margins: Kirigami.Units.smallSpacing
-                    }
-
-                    SectionHeader {
-                        title: i18n("Folders")
-                        QQC2.ToolButton {
-                            icon.name: "view-refresh"
-                            enabled: root.reachable
-                            onClicked: root.rescanAll()
-                            display: QQC2.AbstractButton.IconOnly
-                            text: i18n("Rescan every folder")
-                            QQC2.ToolTip.visible: hovered
-                            QQC2.ToolTip.delay: 400
-                            QQC2.ToolTip.text: text
-                        }
-                    }
-
-                    PlasmaComponents.Label {
-                        visible: root.folders.length === 0
-                        text: root.reachable
-                            ? i18n("Add a folder in the Syncthing web interface.")
-                            : i18n("Folders appear once Syncthing responds.")
-                        opacity: 0.6
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                        Layout.margins: Kirigami.Units.smallSpacing
-                    }
-
-                    Repeater {
-                        model: root.folders
-                        delegate: RowCard {
-                            id: folderCard
-                            required property var modelData
-                            readonly property string folderId: folderCard.modelData.id
-                            readonly property var status: root.folderStatus[folderCard.folderId] || ({})
-                            readonly property var stats: root.folderStats[folderCard.folderId] || ({})
-                            readonly property string state: root.folderState(folderCard.folderId)
-                            readonly property bool showDetail: root.openFolder === folderCard.folderId
-                            current: folderCard.showDetail
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: Kirigami.Units.smallSpacing
-
-                                StatusDot {
-                                    state: folderCard.state
-                                    Layout.alignment: Qt.AlignVCenter
-                                    Layout.rightMargin: Kirigami.Units.smallSpacing
-                                }
-
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 0
-                                    PlasmaComponents.Label {
-                                        text: folderCard.modelData.label || folderCard.folderId
-                                        elide: Text.ElideRight
-                                        Layout.fillWidth: true
-                                    }
-                                    PlasmaComponents.Label {
-                                        text: root.folderStateText(folderCard.folderId)
-                                        font: Kirigami.Theme.smallFont
-                                        color: folderCard.state === "error"
-                                            ? Kirigami.Theme.negativeTextColor
-                                            : Kirigami.Theme.textColor
-                                        opacity: folderCard.state === "error" ? 1 : 0.65
-                                        elide: Text.ElideRight
-                                        Layout.fillWidth: true
-                                    }
-                                }
-
-                                PlasmaComponents.Label {
-                                    visible: folderCard.state === "busy" && Number(folderCard.status.needBytes || 0) > 0
-                                    text: i18n("%1%", Math.floor(root.folderPercent(folderCard.folderId)))
-                                    font.weight: Font.DemiBold
-                                    color: Kirigami.Theme.neutralTextColor
-                                }
-
-                                RowLayout {
-                                    id: folderActions
-                                    visible: folderCard.showDetail
-                                    spacing: 0
-
-                                    QQC2.ToolButton {
-                                        text: i18n("Open")
-                                        icon.name: "folder-open"
-                                        display: QQC2.AbstractButton.IconOnly
-                                        Accessible.name: text
-                                        QQC2.ToolTip.visible: hovered
-                                        QQC2.ToolTip.delay: 400
-                                        QQC2.ToolTip.text: text
-                                        onClicked: root.openFolderPath(folderCard.modelData.path)
-                                    }
-                                    QQC2.ToolButton {
-                                        text: i18n("Rescan")
-                                        icon.name: "view-refresh"
-                                        display: QQC2.AbstractButton.IconOnly
-                                        enabled: !folderCard.modelData.paused
-                                        Accessible.name: text
-                                        QQC2.ToolTip.visible: hovered
-                                        QQC2.ToolTip.delay: 400
-                                        QQC2.ToolTip.text: text
-                                        onClicked: root.rescanFolder(folderCard.folderId)
-                                    }
-                                    QQC2.ToolButton {
-                                        text: folderCard.modelData.paused ? i18n("Resume") : i18n("Pause")
-                                        icon.name: folderCard.modelData.paused ? "media-playback-start" : "media-playback-pause"
-                                        display: QQC2.AbstractButton.IconOnly
-                                        Accessible.name: text
-                                        QQC2.ToolTip.visible: hovered
-                                        QQC2.ToolTip.delay: 400
-                                        QQC2.ToolTip.text: text
-                                        onClicked: root.setFolderPaused(folderCard.folderId, !folderCard.modelData.paused)
-                                    }
-                                }
-
-                                Kirigami.Separator {
-                                    visible: folderCard.showDetail
-                                    Layout.preferredWidth: 1
-                                    Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
-                                    Layout.alignment: Qt.AlignVCenter
-                                }
-
-                                Kirigami.Icon {
-                                    source: folderCard.showDetail ? "go-down" : "go-next"
-                                    opacity: 0.6
-                                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                                }
-
-                                TapHandler {
-                                    id: folderTapHandler
-                                    onTapped: {
-                                        var position = folderTapHandler.point.position
-                                        if (folderActions.visible
-                                                && position.x >= folderActions.x
-                                                && position.x <= folderActions.x + folderActions.width)
-                                            return
-                                        root.openFolder = folderCard.showDetail ? "" : folderCard.folderId
-                                        if (root.openFolder === folderCard.folderId && folderCard.state === "busy")
-                                            root.refreshFolderNeed(folderCard.folderId)
-                                    }
-                                }
-                            }
-
-                            QQC2.ProgressBar {
-                                visible: folderCard.state === "busy" && Number(folderCard.status.needBytes || 0) > 0
-                                from: 0
-                                to: 100
-                                value: root.folderPercent(folderCard.folderId)
-                                Layout.fillWidth: true
-                            }
-
-                            ColumnLayout {
-                                visible: folderCard.showDetail
-                                Layout.fillWidth: true
-                                Layout.topMargin: Kirigami.Units.smallSpacing
-                                spacing: 2
-
-                                Kirigami.Separator { Layout.fillWidth: true }
-                                DetailRow {
-                                    label: i18n("Path")
-                                    value: folderCard.modelData.path || ""
-                                }
-                                DetailRow {
-                                    label: i18n("Mode")
-                                    value: root.folderTypeText(folderCard.modelData.type)
-                                }
-                                DetailRow {
-                                    label: i18n("Content")
-                                    value: i18n("%1 in %2 files",
-                                        root.formatBytes(folderCard.status.localBytes),
-                                        root.formatNumber(folderCard.status.localFiles))
-                                }
-                                DetailRow {
-                                    visible: Number(folderCard.status.needTotalItems || 0) > 0
-                                    label: i18n("Remaining")
-                                    value: i18n("%1 in %2 items",
-                                        root.formatBytes(folderCard.status.needBytes),
-                                        root.formatNumber(folderCard.status.needTotalItems))
-                                }
-                                ColumnLayout {
-                                    readonly property var queueItems: root.folderNeedItems[folderCard.folderId] || []
-                                    visible: folderCard.state === "busy"
-                                        && (root.folderNeedLoading[folderCard.folderId] || queueItems.length > 0)
-                                    Layout.fillWidth: true
-                                    Layout.topMargin: Kirigami.Units.smallSpacing
-                                    spacing: 2
-
-                                    PlasmaComponents.Label {
-                                        text: i18n("Sync queue")
-                                        font.weight: Font.DemiBold
-                                        font.pointSize: Kirigami.Theme.smallFont.pointSize
-                                        opacity: 0.75
-                                    }
-                                    QQC2.ProgressBar {
-                                        visible: root.folderNeedLoading[folderCard.folderId] === true
-                                        indeterminate: true
-                                        Layout.fillWidth: true
-                                    }
-                                    Repeater {
-                                        model: parent.queueItems
-                                        delegate: RowLayout {
-                                            required property var modelData
-                                            Layout.fillWidth: true
-                                            spacing: Kirigami.Units.smallSpacing
-                                            PlasmaComponents.Label {
-                                                text: modelData.stage
-                                                font: Kirigami.Theme.smallFont
-                                                opacity: 0.55
-                                                Layout.preferredWidth: Kirigami.Units.gridUnit * 2.5
-                                            }
-                                            PlasmaComponents.Label {
-                                                text: modelData.name
-                                                font: Kirigami.Theme.smallFont
-                                                elide: Text.ElideMiddle
-                                                Layout.fillWidth: true
-                                            }
-                                            PlasmaComponents.Label {
-                                                text: root.formatBytes(modelData.size)
-                                                font: Kirigami.Theme.smallFont
-                                                opacity: 0.65
-                                            }
-                                        }
-                                    }
-                                }
-                                DetailRow {
-                                    label: i18n("Shared with")
-                                    value: folderCard.sharedWith()
-                                }
-                                DetailRow {
-                                    label: i18n("Last scan")
-                                    value: root.formatWhen(folderCard.stats.lastScan)
-                                }
-                                DetailRow {
-                                    visible: !!(folderCard.stats.lastFile && folderCard.stats.lastFile.filename)
-                                    label: i18n("Last change")
-                                    value: folderCard.stats.lastFile
-                                        ? i18n("%1 · %2",
-                                            String(folderCard.stats.lastFile.filename).split("/").pop(),
-                                            root.formatWhen(folderCard.stats.lastFile.at))
-                                        : ""
-                                }
-
-                                Repeater {
-                                    model: (root.folderErrors[folderCard.folderId] || []).slice(0, 4)
-                                    delegate: PlasmaComponents.Label {
-                                        required property var modelData
-                                        text: i18n("%1 — %2", modelData.path, modelData.error)
-                                        color: Kirigami.Theme.negativeTextColor
-                                        font: Kirigami.Theme.smallFont
-                                        wrapMode: Text.Wrap
-                                        Layout.fillWidth: true
-                                    }
-                                }
-                                PlasmaComponents.Label {
-                                    readonly property int extra: (root.folderErrors[folderCard.folderId] || []).length - 4
-                                    visible: extra > 0
-                                    text: i18np("%1 more failed item", "%1 more failed items", extra)
-                                    font: Kirigami.Theme.smallFont
-                                    opacity: 0.6
-                                    Layout.fillWidth: true
-                                }
-
-                            }
-
-                            function sharedWith() {
-                                var names = []
-                                var shared = folderCard.modelData.devices || []
-                                for (var i = 0; i < shared.length; ++i) {
-                                    if (shared[i].deviceID === root.myId) continue
-                                    names.push(root.deviceName(shared[i].deviceID))
-                                }
-                                return names.length > 0 ? names.join(", ") : i18n("nobody")
-                            }
-                        }
-                    }
-
-                    SectionHeader { title: i18n("Devices") }
-
-                    PlasmaComponents.Label {
-                        visible: root.remoteDevices.length === 0
-                        text: i18n("No remote devices are configured.")
-                        opacity: 0.6
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                        Layout.margins: Kirigami.Units.smallSpacing
-                    }
-
-                    Repeater {
-                        model: root.remoteDevices
-                        delegate: RowCard {
-                            id: deviceCard
-                            required property var modelData
-                            readonly property string deviceId: deviceCard.modelData.deviceID
-                            readonly property var connection: root.deviceConnections[deviceCard.deviceId] || ({})
-                            readonly property var completion: root.deviceCompletion[deviceCard.deviceId] || ({})
-                            readonly property var stats: root.deviceStats[deviceCard.deviceId] || ({})
-                            readonly property bool showDetail: root.openDevice === deviceCard.deviceId
-                            readonly property string state: root.deviceState(deviceCard.modelData)
-                            current: deviceCard.showDetail
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: Kirigami.Units.smallSpacing
-
-                                StatusDot {
-                                    state: deviceCard.state === "offline" ? "unknown" : deviceCard.state
-                                    Layout.alignment: Qt.AlignVCenter
-                                    Layout.rightMargin: Kirigami.Units.smallSpacing
-                                }
-
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 0
-                                    PlasmaComponents.Label {
-                                        text: deviceCard.modelData.name || deviceCard.deviceId.slice(0, 7)
-                                        elide: Text.ElideRight
-                                        Layout.fillWidth: true
-                                    }
-                                    PlasmaComponents.Label {
-                                        text: root.deviceStatusText(deviceCard.modelData)
-                                        font: Kirigami.Theme.smallFont
-                                        color: deviceCard.state === "stale"
-                                            ? Kirigami.Theme.neutralTextColor
-                                            : Kirigami.Theme.textColor
-                                        opacity: deviceCard.state === "stale" ? 1 : 0.65
-                                        elide: Text.ElideRight
-                                        Layout.fillWidth: true
-                                    }
-                                }
-
-                                QQC2.ToolButton {
-                                    id: devicePauseButton
-                                    visible: deviceCard.showDetail
-                                    text: deviceCard.modelData.paused ? i18n("Resume") : i18n("Pause")
-                                    icon.name: deviceCard.modelData.paused ? "media-playback-start" : "media-playback-pause"
-                                    display: QQC2.AbstractButton.IconOnly
-                                    Accessible.name: text
-                                    QQC2.ToolTip.visible: hovered
-                                    QQC2.ToolTip.delay: 400
-                                    QQC2.ToolTip.text: text
-                                    onClicked: root.setDevicePaused(deviceCard.deviceId, !deviceCard.modelData.paused)
-                                }
-
-                                Kirigami.Separator {
-                                    visible: deviceCard.showDetail
-                                    Layout.preferredWidth: 1
-                                    Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
-                                    Layout.alignment: Qt.AlignVCenter
-                                }
-
-                                Kirigami.Icon {
-                                    source: deviceCard.showDetail ? "go-down" : "go-next"
-                                    opacity: 0.6
-                                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                                }
-
-                                TapHandler {
-                                    id: deviceTapHandler
-                                    onTapped: {
-                                        var position = deviceTapHandler.point.position
-                                        if (devicePauseButton.visible
-                                                && position.x >= devicePauseButton.x
-                                                && position.x <= devicePauseButton.x + devicePauseButton.width)
-                                            return
-                                        root.openDevice = deviceCard.showDetail ? "" : deviceCard.deviceId
-                                    }
-                                }
-                            }
-
-                            ColumnLayout {
-                                visible: deviceCard.showDetail
-                                Layout.fillWidth: true
-                                Layout.topMargin: Kirigami.Units.smallSpacing
-                                spacing: 2
-
-                                Kirigami.Separator { Layout.fillWidth: true }
-                                DetailRow {
-                                    visible: !!deviceCard.connection.address
-                                    label: i18n("Address")
-                                    value: i18n("%1 · %2",
-                                        deviceCard.connection.address || "",
-                                        deviceCard.connection.type || "")
-                                }
-                                DetailRow {
-                                    visible: !!deviceCard.connection.clientVersion
-                                    label: i18n("Version")
-                                    value: deviceCard.connection.clientVersion || ""
-                                }
-                                DetailRow {
-                                    label: i18n("Transferred")
-                                    value: i18n("%1 in · %2 out",
-                                        root.formatBytes(deviceCard.connection.inBytesTotal),
-                                        root.formatBytes(deviceCard.connection.outBytesTotal))
-                                }
-                                DetailRow {
-                                    visible: deviceCard.completion.completion !== undefined
-                                    label: i18n("In sync")
-                                    value: i18n("%1%", Math.floor(Number(deviceCard.completion.completion || 0)))
-                                }
-                                DetailRow {
-                                    label: i18n("Last seen")
-                                    value: root.validTimestamp(deviceCard.stats.lastSeen)
-                                        ? root.formatWhen(deviceCard.stats.lastSeen)
-                                        : i18n("never")
-                                }
-                                DetailRow {
-                                    visible: Number(deviceCard.stats.lastConnectionDurationS || 0) > 0
-                                    label: i18n("Last connection")
-                                    value: root.formatDuration(deviceCard.stats.lastConnectionDurationS)
-                                }
-                                DetailRow {
-                                    label: i18n("Device ID")
-                                    value: deviceCard.deviceId.slice(0, 7)
-                                }
-
-                            }
-                        }
-                    }
-                }
-            }
-
-            Kirigami.Separator { Layout.fillWidth: true }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: Kirigami.Units.smallSpacing
-                PlasmaComponents.Label {
-                    text: root.versionText !== ""
-                        ? i18n("Syncthing %1 · up %2", root.versionText, root.formatUptime(root.uptimeSeconds))
-                        : i18n("Not connected")
-                    font: Kirigami.Theme.smallFont
-                    opacity: 0.6
-                    elide: Text.ElideRight
-                    Layout.fillWidth: true
-                }
-                PlasmaComponents.Label {
-                    visible: root.myId !== ""
-                    text: root.deviceName(root.myId)
-                    font: Kirigami.Theme.smallFont
-                    opacity: 0.6
-                }
-            }
-        }
-    }
+    compactRepresentation: CompactView {}
+    fullRepresentation: FullView {}
 }

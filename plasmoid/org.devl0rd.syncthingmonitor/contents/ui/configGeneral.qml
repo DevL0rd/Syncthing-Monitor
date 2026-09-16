@@ -11,6 +11,55 @@ Kirigami.FormLayout {
     property alias cfg_notifyErrors: errorsCheck.checked
     property alias cfg_notifyInvitations: invitationsCheck.checked
     property alias cfg_notifyOfflineDevices: offlineCheck.checked
+    property string cfg_compactShow
+    property string cfg_defaultTab
+    property alias cfg_rememberTab: rememberTab.checked
+    property alias cfg_showRateGraph: showRateGraph.checked
+    property string cfg_currentTab
+    property string cfg_lastSuccessfulSync
+
+    QQC2.Label {
+        Kirigami.FormData.isSection: true
+        text: i18n("Appearance")
+        font.weight: Font.DemiBold
+    }
+
+    QQC2.ComboBox {
+        Kirigami.FormData.label: i18n("Panel shows:")
+        textRole: "text"
+        valueRole: "value"
+        model: [
+            { text: i18n("Icon and sync progress"), value: "status" },
+            { text: i18n("Icon and transfer rates"), value: "rates" },
+            { text: i18n("Icon only"), value: "icon" }
+        ]
+        Component.onCompleted: currentIndex = Math.max(0, indexOfValue(cfg_compactShow))
+        onActivated: cfg_compactShow = currentValue
+    }
+
+    QQC2.Label {
+        text: i18n("Transfer rates in the panel are read from Syncthing every two seconds. Progress updates only when Syncthing reports a change.")
+        opacity: 0.7
+        wrapMode: Text.Wrap
+        Layout.maximumWidth: Kirigami.Units.gridUnit * 24
+    }
+
+    QQC2.ComboBox {
+        Kirigami.FormData.label: i18n("Open on:")
+        textRole: "text"
+        valueRole: "value"
+        enabled: !rememberTab.checked
+        model: [
+            { text: i18n("Overview"), value: "overview" },
+            { text: i18n("Folders"), value: "folders" },
+            { text: i18n("Devices"), value: "devices" },
+            { text: i18n("Activity"), value: "activity" }
+        ]
+        Component.onCompleted: currentIndex = Math.max(0, indexOfValue(cfg_defaultTab))
+        onActivated: cfg_defaultTab = currentValue
+    }
+    QQC2.CheckBox { id: rememberTab; text: i18n("Reopen on the last tab") }
+    QQC2.CheckBox { id: showRateGraph; Kirigami.FormData.label: i18n("Show:"); text: i18n("Transfer rate graph") }
 
     QQC2.Label {
         Kirigami.FormData.isSection: true

@@ -61,6 +61,15 @@ command -v kpackagetool6 >/dev/null 2>&1 || {
     exit 1
 }
 
+[[ -e "${SCRIPT_DIR}/shared/common/PopupShell.qml" ]] || {
+    printf 'Error: shared/common (Linux-Plasma-Shared submodule) is empty.\n' >&2
+    printf 'Run: git submodule update --init --recursive\n' >&2
+    exit 1
+}
+
+mkdir -p "${PLASMOID}/contents/ui/lib"
+cp "${SCRIPT_DIR}/shared/common/"*.qml "${SCRIPT_DIR}/shared/common/"*.js "${PLASMOID}/contents/ui/lib/"
+
 configure_local_file_access
 
 if kpackagetool6 -t Plasma/Applet -u "${PLASMOID}" >/dev/null 2>&1; then
