@@ -56,8 +56,8 @@ enabled or disabled independently in the same settings page.
 ## Install
 
 ```bash
-git clone --recurse-submodules https://github.com/DevL0rd/Linux-Syncthing-Monitor.git
-cd Linux-Syncthing-Monitor
+git clone --recurse-submodules https://github.com/DevL0rd/Syncthing-Monitor.git
+cd Syncthing-Monitor
 ./install.sh
 ```
 

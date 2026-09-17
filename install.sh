@@ -80,7 +80,7 @@ command -v kpackagetool6 >/dev/null 2>&1 || {
 }
 
 [[ -e "${SCRIPT_DIR}/shared/common/PopupShell.qml" ]] || {
-    printf 'Error: shared/common (Linux-Plasma-Shared submodule) is empty.\n' >&2
+    printf 'Error: shared/common (Plasma-Shared submodule) is empty.\n' >&2
     printf 'Run: git submodule update --init --recursive\n' >&2
     exit 1
 }

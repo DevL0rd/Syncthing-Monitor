@@ -10,7 +10,7 @@
         "Category": "System Information",
         "License": "GPL-3.0-or-later",
         "Version": "1.1.0",
-        "Website": "https://github.com/DevL0rd/Linux-Syncthing-Monitor"
+        "Website": "https://github.com/DevL0rd/Syncthing-Monitor"
     },
     "KPackageStructure": "Plasma/Applet",
     "X-Plasma-API-Minimum-Version": "6.0"
