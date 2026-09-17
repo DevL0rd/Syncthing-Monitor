@@ -5,6 +5,8 @@
 set -euo pipefail
 
 readonly PLASMOID_ID="org.devl0rd.syncthingmonitor"
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/packaging/lib.sh"
+unregister_system_updates
 
 command -v kpackagetool6 >/dev/null 2>&1 || {
     printf 'Error: kpackagetool6 is required.\n' >&2

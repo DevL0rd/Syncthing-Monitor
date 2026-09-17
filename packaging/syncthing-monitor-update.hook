@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = *
+
+[Action]
+Description = Updating Syncthing Monitor...
+When = PostTransaction
+Exec = /usr/lib/syncthing-monitor/system-update
+Depends = git

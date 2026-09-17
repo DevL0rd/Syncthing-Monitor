@@ -12,6 +12,24 @@ readonly PLASMA_OVERRIDE_DIR="${CONFIG_HOME}/systemd/user/${PLASMA_SERVICE}.d"
 readonly PLASMA_OVERRIDE="${PLASMA_OVERRIDE_DIR}/syncthing-monitor.conf"
 readonly PLASMA_ENV_DIR="${CONFIG_HOME}/plasma-workspace/env"
 readonly PLASMA_ENV_FILE="${PLASMA_ENV_DIR}/syncthing-monitor.sh"
+source "${SCRIPT_DIR}/packaging/lib.sh"
+
+AUR=false
+SYSTEM_UPDATE=false
+[[ ${SYNCTHING_MONITOR_AUR:-} == @(1|true|yes) ]] && AUR=true
+for argument in "$@"; do
+    case "${argument}" in
+    --aur) AUR=true ;;
+    --system-update) SYSTEM_UPDATE=true ;;
+    -h | --help)
+        printf 'Usage: ./install.sh [--aur]\n'
+        printf 'Installs Syncthing Monitor and, for a git checkout on a pacman system, updates it with every system update.\n'
+        printf '  --aur  Installed by a package (also SYNCTHING_MONITOR_AUR=true); no update hook is registered.\n'
+        exit 0
+        ;;
+    *) printf 'Unknown option: %s\n' "${argument}" >&2; exit 1 ;;
+    esac
+done
 write_config_file() {
     local path="$1"
     local contents="$2"
@@ -78,6 +96,12 @@ else
     kpackagetool6 -t Plasma/Applet -i "${PLASMOID}" >/dev/null
     printf 'Installed Syncthing Monitor.\n'
 fi
+
+if ${SYSTEM_UPDATE}; then
+    notify_updated "Syncthing Monitor is up to date. Restart Plasma or log out and back in to load the updated widget."
+    exit 0
+fi
+register_system_updates "${SCRIPT_DIR}" "${AUR}"
 
 printf 'Add "Syncthing Monitor" from Plasma\047s Add Widgets menu.\n'
 printf 'Restarting Plasma...\n'
