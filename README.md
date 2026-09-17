@@ -26,7 +26,8 @@
   <a href="#get-started"><b>Get started</b></a> ·
   <a href="#see-it-work"><b>See it work</b></a> ·
   <a href="#settings"><b>Settings</b></a> ·
-  <a href="#faq"><b>FAQ</b></a>
+  <a href="#faq"><b>FAQ</b></a> ·
+  <a href="#more"><b>More projects</b></a>
 </p>
 
 <p align="center">
@@ -262,6 +263,50 @@ Plasma only lets widgets read local files, like Syncthing's configuration, when 
 <br>
 No. The widget listens to Syncthing's event stream instead of asking for everything over and over. Transfer rates are read every two seconds, and only while you can see them.
 </details>
+
+---
+
+<a id="more"></a>
+
+## 🧰 More from DevL0rd
+
+Other Plasma projects made to sit on the same desktop. Click a banner to open it on GitHub.
+
+<p align="center">
+  <a href="https://github.com/DevL0rd/Konveyor">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/media/more/konveyor-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="docs/media/more/konveyor-light.svg">
+      <img alt="Konveyor — Scrolling tiling for KDE Plasma" src="docs/media/more/konveyor-dark.svg" width="600">
+    </picture>
+  </a>
+  <br>
+  <a href="https://github.com/DevL0rd/Konveyor"><b>Konveyor</b></a> · Your windows, on a conveyor belt.
+</p>
+
+<p align="center">
+  <a href="https://github.com/DevL0rd/RVC-Voice-Changer">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/media/more/rvc-voice-changer-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="docs/media/more/rvc-voice-changer-light.svg">
+      <img alt="RVC Voice Changer — Real-time AI voice changing for Plasma" src="docs/media/more/rvc-voice-changer-dark.svg" width="600">
+    </picture>
+  </a>
+  <br>
+  <a href="https://github.com/DevL0rd/RVC-Voice-Changer"><b>RVC Voice Changer</b></a> · Sound like anyone, in every app.
+</p>
+
+<p align="center">
+  <a href="https://github.com/DevL0rd/Android-Daemon">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/media/more/android-daemon-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="docs/media/more/android-daemon-light.svg">
+      <img alt="Android-Daemon — Your Android phone, part of your Plasma desktop" src="docs/media/more/android-daemon-dark.svg" width="600">
+    </picture>
+  </a>
+  <br>
+  <a href="https://github.com/DevL0rd/Android-Daemon"><b>Android-Daemon</b></a> · Your phone, right on your desktop.
+</p>
 
 ---
 
