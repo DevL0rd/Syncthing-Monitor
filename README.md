@@ -11,6 +11,8 @@ unavailable or something needs attention. Next to the icon the button shows the
 overall sync progress (or the number of items needing attention), the live
 transfer rates, or nothing, as configured.
 
+<p align="center"><img alt="The Syncthing Monitor dashboard going through its Overview, Folders, Devices and Activity tabs and a search" src="docs/media/dashboard.gif" width="536"></p>
+
 ## Features
 
 - Searchable dashboard with Overview, Folders, Devices and Activity tabs;
