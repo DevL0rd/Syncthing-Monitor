@@ -33,10 +33,6 @@
             <label>Notify when a device exceeds the offline grace period</label>
             <default>false</default>
         </entry>
-        <entry name="compactShow" type="String">
-            <label>What the panel button shows next to the icon</label>
-            <default>status</default>
-        </entry>
         <entry name="defaultTab" type="String">
             <default>overview</default>
         </entry>

@@ -92,7 +92,7 @@ PlasmoidItem {
     property bool locating: false
     property int idleRateSamples: 90
     property int rateSamples: 0
-    readonly property bool wantsRates: root.viewVisible || (root.inPanel && Plasmoid.configuration.compactShow === "rates")
+    readonly property bool wantsRates: root.viewVisible
     property string tabKey: Plasmoid.configuration.rememberTab ? Plasmoid.configuration.currentTab : Plasmoid.configuration.defaultTab
     onTabKeyChanged: Plasmoid.configuration.currentTab = tabKey
 

@@ -78,9 +78,7 @@ The installer adds the widget and restarts Plasma. Open **Add Widgets**, drop **
 
 ### 📍 Right in your panel
 
-The panel button is a small, steady readout of your sync. The dot on the icon turns green when every folder is up to date, orange while anything is syncing and red when something needs you. Next to it you can show the overall progress, live transfer rates over a faint rate graph, or nothing at all.
-
-<p align="center"><img alt="The panel button when up to date, syncing, needing attention, showing transfer rates and as an icon only" src="docs/media/panel.png" width="88%"></p>
+The panel button stays compact: a folder icon with a status dot. The dot turns green when every folder is up to date, orange while anything is syncing and red when something needs you.
 
 ### 📊 Everything on one page
 
@@ -183,7 +181,7 @@ Every folder shows its state, size and progress at a glance. Open one to see whe
     </td>
     <td width="33%" valign="top">
       <h4>🪶 Light on your system</h4>
-      Updates come from Syncthing's event stream. Transfer rates are only read while the dashboard is open or the panel shows them.
+      Updates come from Syncthing's event stream. Transfer rates are only read while the dashboard is open.
     </td>
   </tr>
   <tr>
@@ -217,7 +215,7 @@ Right-click the widget and choose **Configure Syncthing Monitor**, or hit the ge
     <td width="50%" valign="top"><img alt="Syncthing Monitor settings" src="docs/media/settings.png"></td>
     <td valign="top">
       <br>
-      🎨 <b>Appearance</b> — what the panel button shows, which tab the dashboard opens on, and the transfer rate graph
+      🎨 <b>Appearance</b> — which tab the dashboard opens on, and the transfer rate graph in the dashboard
       <br><br>
       🔌 <b>Connection override</b> — point the widget at another Syncthing with its address and API key. Leave both empty to use your local Syncthing
       <br><br>
