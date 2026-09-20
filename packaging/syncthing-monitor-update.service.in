@@ -5,8 +5,9 @@ After=graphical-session.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=@CHECKOUT@
-ExecStart=@CHECKOUT@/install.sh --system-update
+Environment="SYNCTHING_MONITOR_SOURCE_DIR=@CHECKOUT@"
+Environment="SYNCTHING_MONITOR_INSTALL_SUPPORT=@INSTALL_SUPPORT@"
+ExecStart=@INSTALLER@ --system-update
 
 [Install]
 WantedBy=graphical-session.target

@@ -4,15 +4,42 @@
 
 set -euo pipefail
 
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly PLASMOID="${SCRIPT_DIR}/plasmoid/org.devl0rd.syncthingmonitor"
+readonly INSTALL_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly SOURCE_DIR="${SYNCTHING_MONITOR_SOURCE_DIR:-${INSTALL_DIR}}"
+readonly INSTALLER_RUNTIME="${XDG_DATA_HOME:-${HOME}/.local/share}/syncthing-monitor/installer"
+readonly INSTALL_SUPPORT="${SYNCTHING_MONITOR_INSTALL_SUPPORT:-${INSTALL_DIR}/packaging}"
+readonly PLASMOID="${SOURCE_DIR}/plasmoid/org.devl0rd.syncthingmonitor"
 readonly CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
 readonly PLASMA_SERVICE="plasma-plasmashell.service"
 readonly PLASMA_OVERRIDE_DIR="${CONFIG_HOME}/systemd/user/${PLASMA_SERVICE}.d"
 readonly PLASMA_OVERRIDE="${PLASMA_OVERRIDE_DIR}/syncthing-monitor.conf"
 readonly PLASMA_ENV_DIR="${CONFIG_HOME}/plasma-workspace/env"
 readonly PLASMA_ENV_FILE="${PLASMA_ENV_DIR}/syncthing-monitor.sh"
-source "${SCRIPT_DIR}/packaging/lib.sh"
+
+stage_installer() {
+    [[ -f "${SOURCE_DIR}/install.sh" && -f "${SOURCE_DIR}/packaging/lib.sh" ]] || {
+        printf 'Error: the Syncthing Monitor installer source is incomplete: %s\n' "${SOURCE_DIR}" >&2
+        exit 1
+    }
+    [[ "${SOURCE_DIR}" == "${INSTALLER_RUNTIME}" ]] && return 0
+
+    local parent temporary previous
+    parent="$(dirname -- "${INSTALLER_RUNTIME}")"
+    mkdir -p -- "${parent}"
+    temporary="$(mktemp -d "${parent}/.installer.XXXXXX")"
+    previous="${parent}/.installer.previous.$$"
+    mkdir -p -- "${temporary}/packaging"
+    install -m755 "${SOURCE_DIR}/install.sh" "${temporary}/install.sh"
+    install -m644 "${SOURCE_DIR}/packaging/lib.sh" "${temporary}/packaging/lib.sh"
+    if [[ -e "${INSTALLER_RUNTIME}" ]]; then
+        mv -- "${INSTALLER_RUNTIME}" "${previous}"
+    fi
+    mv -- "${temporary}" "${INSTALLER_RUNTIME}"
+    rm -rf -- "${previous}"
+}
+
+stage_installer
+source "${INSTALL_SUPPORT}/lib.sh"
 
 AUR=false
 SYSTEM_UPDATE=false
@@ -79,14 +106,14 @@ command -v kpackagetool6 >/dev/null 2>&1 || {
     exit 1
 }
 
-[[ -e "${SCRIPT_DIR}/shared/common/PopupShell.qml" ]] || {
+[[ -e "${SOURCE_DIR}/shared/common/PopupShell.qml" ]] || {
     printf 'Error: shared/common (Plasma-Shared submodule) is empty.\n' >&2
     printf 'Run: git submodule update --init --recursive\n' >&2
     exit 1
 }
 
 mkdir -p "${PLASMOID}/contents/ui/lib"
-cp "${SCRIPT_DIR}/shared/common/"*.qml "${SCRIPT_DIR}/shared/common/"*.js "${PLASMOID}/contents/ui/lib/"
+cp "${SOURCE_DIR}/shared/common/"*.qml "${SOURCE_DIR}/shared/common/"*.js "${PLASMOID}/contents/ui/lib/"
 
 configure_local_file_access
 
@@ -101,7 +128,7 @@ if ${SYSTEM_UPDATE}; then
     notify_updated "Syncthing Monitor is up to date. Restart Plasma or log out and back in to load the updated widget."
     exit 0
 fi
-register_system_updates "${SCRIPT_DIR}" "${AUR}"
+register_system_updates "${SOURCE_DIR}" "${AUR}" "${INSTALLER_RUNTIME}"
 
 printf 'Add "Syncthing Monitor" from Plasma\047s Add Widgets menu.\n'
 printf 'Restarting Plasma...\n'

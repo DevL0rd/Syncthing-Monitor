@@ -55,7 +55,11 @@ if grep -q -- '--system-update-root' "$checkout/install.sh"; then
     (cd "$checkout" && "$checkout/install.sh" --system-update-root --owner "$owner")
 fi
 if [[ -S /run/user/$uid/bus ]]; then
-    (cd "$checkout" && as_owner "$checkout/install.sh" --system-update)
+    installer="$home/.local/share/syncthing-monitor/installer/install.sh"
+    [[ -x $installer ]] || installer="$checkout/install.sh"
+    as_owner env SYNCTHING_MONITOR_SOURCE_DIR="$checkout" \
+        SYNCTHING_MONITOR_INSTALL_SUPPORT="$home/.local/share/syncthing-monitor/installer/packaging" \
+        "$installer" --system-update
 else
     as_owner mkdir -p "$home/.local/state/$ID"
     as_owner touch "$home/.local/state/$ID/update-pending"

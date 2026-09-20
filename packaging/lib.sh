@@ -16,7 +16,7 @@ update_as_root() {
 }
 
 register_system_updates() {
-    local checkout="$1" aur="$2"
+    local checkout="$1" aur="$2" installer="$3"
     if [[ $aur == true ]] || ! command -v pacman >/dev/null || ! git -C "$checkout" rev-parse --git-dir >/dev/null 2>&1; then
         unregister_system_updates
         return 0
@@ -27,7 +27,10 @@ register_system_updates() {
     printf '%s\n%s\n' "$checkout" "$(id -un)" | update_as_root install -Dm644 /dev/stdin "$UPDATE_STATE_DIR/source"
     local units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
     mkdir -p "$units"
-    sed "s|@CHECKOUT@|$checkout|g" "$checkout/packaging/$UPDATE_ID-update.service.in" >"$units/$UPDATE_UNIT"
+    sed -e "s|@CHECKOUT@|$checkout|g" \
+        -e "s|@INSTALLER@|$installer/install.sh|g" \
+        -e "s|@INSTALL_SUPPORT@|$installer/packaging|g" \
+        "$checkout/packaging/$UPDATE_ID-update.service.in" >"$units/$UPDATE_UNIT"
     systemctl --user daemon-reload
     systemctl --user enable "$UPDATE_UNIT" >/dev/null 2>&1
 }
@@ -43,6 +46,7 @@ unregister_system_updates() {
         systemctl --user daemon-reload
     fi
     rm -f "$UPDATE_PENDING"
+    rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/syncthing-monitor/installer"
 }
 
 notify_updated() {
