@@ -4,14 +4,32 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 CONTAINER="syncthing-monitor-install-test"
 IMAGE="${SYNCTHING_MONITOR_TEST_IMAGE:-archlinux:latest}"
+CHECKOUT="/home/tester/Syncthing-Monitor"
+MOVED_CHECKOUT="/opt/Syncthing-Monitor"
 
 as_root() {
     docker exec "$CONTAINER" "$@"
 }
 
-as_tester() {
-    docker exec -u tester -w /home/tester/Syncthing-Monitor -e USER=tester -e LOGNAME=tester -e XDG_RUNTIME_DIR=/run/user/1000 \
+as_tester_in() {
+    local directory="$1"
+    shift
+    docker exec -u tester -w "$directory" -e USER=tester -e LOGNAME=tester -e XDG_RUNTIME_DIR=/run/user/1000 \
         -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus -e WAYLAND_DISPLAY=wayland-0 "$CONTAINER" "$@"
+}
+
+as_tester() {
+    as_tester_in "$CHECKOUT" "$@"
+}
+
+check_checkout_clean() {
+    local status
+    status=$(as_tester git status --ignored --porcelain)
+    if [[ $status != "$CHECKOUT_STATUS" ]]; then
+        printf '%s left files in the checkout:\n%s\n' "$1" "$(diff <(printf '%s\n' "$CHECKOUT_STATUS") <(printf '%s\n' "$status"))"
+        exit 1
+    fi
+    echo "$1 left the checkout as it was"
 }
 
 step() {
@@ -24,9 +42,9 @@ docker run -d --name "$CONTAINER" --privileged --cgroupns=private --tmpfs /run -
 trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
 as_root pacman -Syu --noconfirm --needed plasma-desktop sudo git
 as_root bash -c 'useradd -m -u 1000 tester && echo "tester ALL=(ALL) NOPASSWD: ALL" >/etc/sudoers.d/tester'
-docker cp . "$CONTAINER:/home/tester/Syncthing-Monitor"
+docker cp . "$CONTAINER:$CHECKOUT"
 docker cp tests/install/. "$CONTAINER:/opt/install-test"
-as_root chown -R tester: /home/tester/Syncthing-Monitor
+as_root chown -R tester: "$CHECKOUT"
 as_tester git config --global --add safe.directory '*'
 
 step "Installing Syncthing Monitor's dependencies"
@@ -36,6 +54,7 @@ step "Starting a Plasma session"
 as_root bash -c 'loginctl enable-linger tester; for _ in $(seq 60); do [[ -S /run/user/1000/bus ]] && exit 0; sleep 1; done; exit 1'
 as_tester /opt/install-test/session.sh
 as_root /opt/install-test/snapshot.sh before
+CHECKOUT_STATUS=$(as_tester git status --ignored --porcelain)
 
 step "Installing Syncthing Monitor"
 as_tester ./install.sh
@@ -44,9 +63,23 @@ sleep 20
 step "Checking that Syncthing Monitor loads in Plasma"
 as_tester /opt/install-test/verify.sh
 
+step "Checking that installing left the checkout as it was"
+check_checkout_clean "Installing"
+
+step "Checking that Syncthing Monitor runs without its checkout"
+as_root mv "$CHECKOUT" "$MOVED_CHECKOUT"
+as_root /opt/install-test/references.sh "$CHECKOUT"
+as_tester_in /home/tester systemctl --user restart plasma-plasmashell.service
+sleep 15
+as_tester_in /home/tester /opt/install-test/verify.sh
+as_root mv "$MOVED_CHECKOUT" "$CHECKOUT"
+
 step "Uninstalling Syncthing Monitor"
 as_tester ./uninstall.sh
 sleep 5
+
+step "Checking that uninstalling left the checkout as it was"
+check_checkout_clean "Uninstalling"
 
 step "Checking that uninstalling left the system as it was"
 as_root /opt/install-test/snapshot.sh after

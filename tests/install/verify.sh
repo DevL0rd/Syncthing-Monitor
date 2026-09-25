@@ -18,7 +18,8 @@ plasma_script() {
 check "the widget is installed" "kpackagetool6 -t Plasma/Applet -l | grep -qx org.devl0rd.syncthingmonitor"
 check "the shared components were copied into the widget" "test -f ~/.local/share/plasma/plasmoids/org.devl0rd.syncthingmonitor/contents/ui/lib/PopupShell.qml"
 check "Plasma can read local configuration" "systemctl --user show plasma-plasmashell.service -p Environment | grep -q QML_XHR_ALLOW_FILE_READ=1"
-check "the system update hook is registered" "test -f /usr/share/libalpm/hooks/syncthing-monitor-update.hook && test -x /usr/lib/syncthing-monitor/system-update"
+check "the system update hook is registered" "test -f /usr/share/libalpm/hooks/syncthing-monitor-update.hook && test -x /usr/lib/syncthing-monitor/system-update && test -f /usr/lib/syncthing-monitor/lib.sh"
+check "the installer is staged for updates" "test -x ~/.local/share/syncthing-monitor/installer/install.sh && test -f ~/.local/share/syncthing-monitor/installer/packaging/lib.sh"
 check "the update finisher is enabled" "systemctl --user is-enabled syncthing-monitor-update.service"
 check "Plasma runs" "systemctl --user is-active plasma-plasmashell.service"
 
