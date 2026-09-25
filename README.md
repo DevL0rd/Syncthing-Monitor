@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/DevL0rd/Syncthing-Monitor/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/DevL0rd/Syncthing-Monitor/ci.yml?branch=main&style=for-the-badge&label=build&logo=githubactions&logoColor=white"></a>
   <img alt="KDE Plasma 6" src="https://img.shields.io/badge/KDE_Plasma-6-1d99f3?style=for-the-badge&logo=kde&logoColor=white">
   <img alt="Syncthing REST API" src="https://img.shields.io/badge/Syncthing-REST_API-0891d1?style=for-the-badge&logo=syncthing&logoColor=white">
   <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-8a5cd6?style=for-the-badge"></a>
