@@ -62,7 +62,7 @@ The installer adds the widget and restarts Plasma. Open **Add Widgets**, drop **
   </tr>
   <tr>
     <td>🧹 <b>Remove</b></td>
-    <td>Run <code>./uninstall.sh</code>. Syncthing and its configuration are never touched.</td>
+    <td>Run <code>./uninstall.sh</code>. It takes the widget, its update hooks and the Plasma permission back out. Syncthing and its configuration are never touched.</td>
   </tr>
   <tr>
     <td>🖥️ <b>Needs</b></td>
@@ -261,7 +261,7 @@ The widget looks for Syncthing's configuration in the standard locations under y
 <details>
 <summary><b>Why does the installer restart Plasma?</b></summary>
 <br>
-Plasma only lets widgets read local files, like Syncthing's configuration, when it starts with that permission turned on. The installer turns it on and restarts Plasma so it takes effect. The permission stays when you uninstall, because other widgets may rely on it.
+Plasma only lets widgets read local files, like Syncthing's configuration, when it starts with that permission turned on. The installer turns it on and restarts Plasma so it takes effect. Uninstalling turns it off again.
 </details>
 
 <details>
