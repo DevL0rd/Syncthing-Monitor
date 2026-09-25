@@ -7,11 +7,18 @@ export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin}"
 
 ID="syncthing-monitor"
 TITLE="Syncthing Monitor"
+SUPPORT="/usr/lib/$ID"
 STATE_FILE="${UPDATE_SOURCE_STATE:-/var/lib/$ID/source}"
 
 log() {
     printf '%s: %s\n' "$ID" "$*"
 }
+
+if [[ ! -r $SUPPORT/lib.sh ]]; then
+    log "$SUPPORT/lib.sh is missing, run ./install.sh again to repair the updater"
+    exit 0
+fi
+source "$SUPPORT/lib.sh"
 
 [[ -r $STATE_FILE ]] || exit 0
 mapfile -t state <"$STATE_FILE"
@@ -53,20 +60,16 @@ git_owner merge --ff-only --quiet '@{upstream}' || exit 0
 git_owner submodule update --init --recursive --quiet
 log "updated to $(git_owner rev-parse --short HEAD)"
 
-source "$checkout/packaging/lib.sh"
 install -Dm755 "$checkout/packaging/system-update" "$UPDATE_LIB_DIR/system-update"
 if manager=$(package_manager); then
     install_update_hook "$checkout" "$manager"
 fi
-if grep -q -- '--system-update-root' "$checkout/install.sh"; then
-    (cd "$checkout" && "$checkout/install.sh" --system-update-root --owner "$owner")
-fi
-if [[ -S /run/user/$uid/bus ]]; then
-    installer="$home/.local/share/syncthing-monitor/installer/install.sh"
-    [[ -x $installer ]] || installer="$checkout/install.sh"
-    as_owner env SYNCTHING_MONITOR_SOURCE_DIR="$checkout" \
-        SYNCTHING_MONITOR_INSTALL_SUPPORT="$home/.local/share/syncthing-monitor/installer/packaging" \
-        "$installer" --system-update
+installer="$home/.local/share/$ID/installer"
+if [[ ! -x $installer/install.sh ]]; then
+    log "$installer/install.sh is missing, run ./install.sh again to finish updating $TITLE"
+elif [[ -S /run/user/$uid/bus ]]; then
+    as_owner env SYNCTHING_MONITOR_SOURCE_DIR="$checkout" SYNCTHING_MONITOR_INSTALL_SUPPORT="$installer/packaging" \
+        "$installer/install.sh" --system-update
 else
     as_owner mkdir -p "$home/.local/state/$UPDATE_ID"
     as_owner touch "$home/.local/state/$UPDATE_ID/update-pending"

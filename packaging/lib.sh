@@ -66,6 +66,7 @@ remove_empty_directory() {
 install_update_hook() {
     local checkout="$1" manager="$2" source target mode
     read -r source target mode <<<"${UPDATE_HOOKS[$manager]}"
+    update_as_root install -Dm644 "$checkout/packaging/lib.sh" "$UPDATE_LIB_DIR/lib.sh"
     update_as_root install -Dm"$mode" "$checkout/packaging/$source" "$target"
     if [[ $manager == pacman ]] && grep -qa 'NetworkAccess' /usr/lib/libalpm.so.* 2>/dev/null; then
         update_as_root sed -i '/^Exec = /a NetworkAccess = allowed' "$target"
