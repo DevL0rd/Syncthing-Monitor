@@ -129,15 +129,33 @@ command -v kpackagetool6 >/dev/null 2>&1 || {
     exit 1
 }
 
-mkdir -p "${PLASMOID}/contents/ui/lib"
-cp "${SOURCE_DIR}/shared/common/"*.qml "${SOURCE_DIR}/shared/common/"*.js "${PLASMOID}/contents/ui/lib/"
+remove_legacy_lib() {
+    local lib="${PLASMOID}/contents/ui/lib"
+    if [[ -d "${lib}" ]] && git -C "${SOURCE_DIR}" check-ignore -q "${lib}" 2>/dev/null; then
+        rm -rf -- "${lib}"
+    fi
+}
+
+stage_plasmoid() {
+    cp -r -- "${PLASMOID}" "${STAGED_PLASMOID}"
+    rm -rf -- "${STAGED_PLASMOID}/contents/ui/lib"
+    mkdir -p -- "${STAGED_PLASMOID}/contents/ui/lib"
+    cp -- "${SOURCE_DIR}/shared/common/"*.qml "${SOURCE_DIR}/shared/common/"*.js "${STAGED_PLASMOID}/contents/ui/lib/"
+}
+
+remove_legacy_lib
+STAGING_DIR="$(mktemp -d)"
+readonly STAGING_DIR
+readonly STAGED_PLASMOID="${STAGING_DIR}/${PLASMOID##*/}"
+trap 'rm -rf -- "${STAGING_DIR}"' EXIT
+stage_plasmoid
 
 configure_local_file_access
 
-if kpackagetool6 -t Plasma/Applet -u "${PLASMOID}" >/dev/null 2>&1; then
+if kpackagetool6 -t Plasma/Applet -u "${STAGED_PLASMOID}" >/dev/null 2>&1; then
     printf 'Updated Syncthing Monitor.\n'
 else
-    kpackagetool6 -t Plasma/Applet -i "${PLASMOID}" >/dev/null
+    kpackagetool6 -t Plasma/Applet -i "${STAGED_PLASMOID}" >/dev/null
     printf 'Installed Syncthing Monitor.\n'
 fi
 
