@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint the scripts and QML
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install the lint tools
+        run: pacman -Syu --noconfirm --needed git shellcheck qt6-declarative
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check the shell scripts
+        run: |
+          for script in install.sh uninstall.sh packaging/*.sh packaging/system-update packaging/*.zypp tests/install/*.sh; do
+            bash -n "$script"
+          done
+          shellcheck -x -P SCRIPTDIR -S warning install.sh uninstall.sh packaging/dependencies.sh packaging/system-update packaging/*.zypp tests/install/*.sh
+
+      - name: Check the QML
+        run: |
+          status=0
+          while IFS= read -r -d '' file; do
+            if ! output=$(/usr/lib/qt6/bin/qmllint "$file" 2>&1); then
+              printf '%s\n' "$output"
+              status=1
+            fi
+          done < <(find plasmoid shared/common -name '*.qml' -print0)
+          exit "$status"
+
+  distros:
+    name: Install dependencies on ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Arch Linux
+            image: archlinux:latest
+            plasma: pacman -Syu --noconfirm git plasma-desktop
+          - name: Fedora 44
+            image: fedora:44
+            plasma: dnf install -y git plasma-desktop
+          - name: openSUSE Tumbleweed
+            image: opensuse/tumbleweed
+            plasma: zypper --non-interactive dup --allow-downgrade && zypper --non-interactive install --force-resolution git plasma6-desktop
+          - name: Debian testing
+            image: debian:testing
+            plasma: apt-get update && apt-get install -y git plasma-desktop
+    container:
+      image: ${{ matrix.image }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install Plasma
+        run: ${{ matrix.plasma }}
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Syncthing Monitor's dependencies
+        run: packaging/dependencies.sh
+
+      - name: Check that everything the widget needs is there
+        shell: bash
+        run: |
+          command -v kpackagetool6 gdbus git
+          for module in org/kde/notification Qt/labs/folderlistmodel QtQuick/Shapes QtCore org/kde/kirigami org/kde/plasma/plasmoid; do
+            find /usr -path "*/qt6/qml/$module/qmldir" -print -quit | grep .
+          done
+
+  install:
+    name: Install, check and uninstall on Arch Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install, check and uninstall Syncthing Monitor in a Plasma session
+        run: tests/install/run.sh
