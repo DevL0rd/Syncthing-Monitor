@@ -8,6 +8,7 @@ UPDATE_LIB_DIR="/usr/lib/$UPDATE_ID"
 UPDATE_STATE_DIR="/var/lib/$UPDATE_ID"
 UPDATE_USER_STATE_DIR="$HOME/.local/state/$UPDATE_ID"
 UPDATE_PENDING="$UPDATE_USER_STATE_DIR/update-pending"
+UPDATE_SOURCE_COPY="${XDG_DATA_HOME:-$HOME/.local/share}/$UPDATE_ID/source"
 UPDATE_GIT_ENV=(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15")
 UPDATE_LEGACY_HOOK="/etc/pacman.d/hooks/$UPDATE_ID-update.hook"
 declare -A UPDATE_HOOKS=(
@@ -80,7 +81,7 @@ enable_update_unit() {
     local checkout="$1" installer="$2" unit="$3"
     local units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
     mkdir -p "$units"
-    sed -e "s|@CHECKOUT@|$checkout|g" \
+    sed -e "s|@CHECKOUT@|$UPDATE_SOURCE_COPY|g" \
         -e "s|@INSTALLER@|$installer/install.sh|g" \
         -e "s|@INSTALL_SUPPORT@|$installer/packaging|g" \
         "$checkout/packaging/$unit.in" >"$units/$unit"
@@ -95,6 +96,46 @@ disable_update_unit() {
     rm -f "$unit"
 }
 
+update_source_url() {
+    local url rest
+    url=$(git -C "$1" remote get-url origin 2>/dev/null) || return 1
+    case $url in
+    git@*:*)
+        rest=${url#git@}
+        url="https://${rest/://}"
+        ;;
+    ssh://git@*) url="https://${url#ssh://git@}" ;;
+    esac
+    printf '%s\n' "$url"
+}
+
+prepare_update_source() {
+    local checkout="$1" url branch
+    [[ $checkout -ef $UPDATE_SOURCE_COPY ]] && return 0
+    if ! url=$(update_source_url "$checkout"); then
+        echo "Error: $checkout has no origin remote to keep an update copy of $UPDATE_TITLE from." >&2
+        exit 1
+    fi
+    echo "Keeping a copy of $UPDATE_TITLE in $UPDATE_SOURCE_COPY for updates..."
+    if ! git -C "$UPDATE_SOURCE_COPY" rev-parse --git-dir >/dev/null 2>&1; then
+        rm -rf "$UPDATE_SOURCE_COPY"
+        mkdir -p "$(dirname "$UPDATE_SOURCE_COPY")"
+        if ! env "${UPDATE_GIT_ENV[@]}" git clone --quiet --recurse-submodules "$url" "$UPDATE_SOURCE_COPY"; then
+            echo "Error: could not clone $url into $UPDATE_SOURCE_COPY." >&2
+            exit 1
+        fi
+        return 0
+    fi
+    checkout_git "$UPDATE_SOURCE_COPY" remote set-url origin "$url"
+    branch=$(checkout_git "$UPDATE_SOURCE_COPY" symbolic-ref --short HEAD)
+    if ! checkout_git "$UPDATE_SOURCE_COPY" fetch --quiet origin; then
+        echo "Error: could not fetch $url into $UPDATE_SOURCE_COPY." >&2
+        exit 1
+    fi
+    checkout_git "$UPDATE_SOURCE_COPY" checkout --quiet --force -B "$branch" "origin/$branch"
+    checkout_git "$UPDATE_SOURCE_COPY" submodule update --init --recursive --quiet
+}
+
 register_system_updates() {
     local checkout="$1" aur="$2" installer="$3" manager
     if [[ $aur == true ]] || ! git -C "$checkout" rev-parse --git-dir >/dev/null 2>&1; then
@@ -103,6 +144,7 @@ register_system_updates() {
     fi
     echo "Registering $UPDATE_TITLE with system updates..."
     if $ATOMIC_SYSTEM; then
+        prepare_update_source "$checkout"
         enable_update_unit "$checkout" "$installer" "$UPDATE_LOGIN_UNIT"
         return 0
     fi
@@ -111,9 +153,10 @@ register_system_updates() {
         unregister_system_updates
         return 0
     fi
+    prepare_update_source "$checkout"
     update_as_root install -Dm755 "$checkout/packaging/system-update" "$UPDATE_LIB_DIR/system-update"
     install_update_hook "$checkout" "$manager"
-    printf '%s\n%s\n' "$checkout" "$(id -un)" | update_as_root install -Dm644 /dev/stdin "$UPDATE_STATE_DIR/source"
+    printf '%s\n%s\n' "$UPDATE_SOURCE_COPY" "$(id -un)" | update_as_root install -Dm644 /dev/stdin "$UPDATE_STATE_DIR/source"
     enable_update_unit "$checkout" "$installer" "$UPDATE_UNIT"
 }
 
@@ -135,7 +178,7 @@ unregister_system_updates() {
         systemctl --user daemon-reload
     fi
     rm -f "$UPDATE_PENDING"
-    rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/syncthing-monitor/installer"
+    rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/syncthing-monitor/installer" "$UPDATE_SOURCE_COPY"
     remove_empty_directory "${XDG_DATA_HOME:-$HOME/.local/share}/syncthing-monitor"
 }
 
