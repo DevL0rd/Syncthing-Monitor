@@ -4,7 +4,8 @@
 
 set -euo pipefail
 
-readonly INSTALL_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly INSTALL_DIR
 readonly SOURCE_DIR="${SYNCTHING_MONITOR_SOURCE_DIR:-${INSTALL_DIR}}"
 readonly INSTALLER_RUNTIME="${XDG_DATA_HOME:-${HOME}/.local/share}/syncthing-monitor/installer"
 readonly INSTALL_SUPPORT="${SYNCTHING_MONITOR_INSTALL_SUPPORT:-${INSTALL_DIR}/packaging}"
@@ -42,16 +43,21 @@ stage_installer
 source "${INSTALL_SUPPORT}/lib.sh"
 
 AUR=false
+SKIP_DEPS=false
 SYSTEM_UPDATE=false
+LOGIN_UPDATE=false
 [[ ${SYNCTHING_MONITOR_AUR:-} == @(1|true|yes) ]] && AUR=true
 for argument in "$@"; do
     case "${argument}" in
     --aur) AUR=true ;;
+    --skip-deps) SKIP_DEPS=true ;;
     --system-update) SYSTEM_UPDATE=true ;;
+    --login-update) LOGIN_UPDATE=true ;;
     -h | --help)
-        printf 'Usage: ./install.sh [--aur]\n'
-        printf 'Installs Syncthing Monitor and, for a git checkout on a pacman system, updates it with every system update.\n'
-        printf '  --aur  Installed by a package (also SYNCTHING_MONITOR_AUR=true); no update hook is registered.\n'
+        printf 'Usage: ./install.sh [--skip-deps] [--aur]\n'
+        printf 'Installs Syncthing Monitor and what it needs and, for a git checkout, updates it with every system update.\n'
+        printf '  --skip-deps  Do not install dependencies with the system package manager.\n'
+        printf '  --aur        Installed by a package (also SYNCTHING_MONITOR_AUR=true); no dependencies are installed and no update hook is registered.\n'
         exit 0
         ;;
     *) printf 'Unknown option: %s\n' "${argument}" >&2; exit 1 ;;
@@ -95,6 +101,17 @@ configure_local_file_access() {
         printf 'Enabled local configuration reads for Plasma.\n'
     fi
 }
+
+if ${LOGIN_UPDATE}; then
+    pull_checkout "${SOURCE_DIR}" || exit 0
+    stage_installer
+    exec env SYNCTHING_MONITOR_SOURCE_DIR="${SOURCE_DIR}" SYNCTHING_MONITOR_INSTALL_SUPPORT="${INSTALLER_RUNTIME}/packaging" \
+        "${INSTALLER_RUNTIME}/install.sh" --system-update
+fi
+
+if ! ${AUR} && ! ${SKIP_DEPS} && ! ${SYSTEM_UPDATE}; then
+    "${SOURCE_DIR}/packaging/dependencies.sh"
+fi
 
 command -v kpackagetool6 >/dev/null 2>&1 || {
     printf 'Error: kpackagetool6 is required.\n' >&2

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+exec 1>&2
+export HOME="${HOME:-/root}"
+export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin}"
+
 ID="syncthing-monitor"
 TITLE="Syncthing Monitor"
 STATE_FILE="${UPDATE_SOURCE_STATE:-/var/lib/$ID/source}"
@@ -20,7 +24,7 @@ home=$(getent passwd "$owner" | cut -d: -f6)
 as_owner() {
     runuser -u "$owner" -- env -i HOME="$home" USER="$owner" LOGNAME="$owner" PATH="$home/.local/bin:/usr/local/bin:/usr/bin:/bin" \
         LANG="${LANG:-C.UTF-8}" XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-        GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15" "$@"
+        GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15" "$@"
 }
 
 git_owner() {
@@ -49,8 +53,11 @@ git_owner merge --ff-only --quiet '@{upstream}' || exit 0
 git_owner submodule update --init --recursive --quiet
 log "updated to $(git_owner rev-parse --short HEAD)"
 
-install -Dm755 "$checkout/packaging/system-update" "/usr/lib/$ID/system-update"
-install -Dm644 "$checkout/packaging/$ID-update.hook" "/etc/pacman.d/hooks/$ID-update.hook"
+source "$checkout/packaging/lib.sh"
+install -Dm755 "$checkout/packaging/system-update" "$UPDATE_LIB_DIR/system-update"
+if manager=$(package_manager); then
+    install_update_hook "$checkout" "$manager"
+fi
 if grep -q -- '--system-update-root' "$checkout/install.sh"; then
     (cd "$checkout" && "$checkout/install.sh" --system-update-root --owner "$owner")
 fi
@@ -61,7 +68,7 @@ if [[ -S /run/user/$uid/bus ]]; then
         SYNCTHING_MONITOR_INSTALL_SUPPORT="$home/.local/share/syncthing-monitor/installer/packaging" \
         "$installer" --system-update
 else
-    as_owner mkdir -p "$home/.local/state/$ID"
-    as_owner touch "$home/.local/state/$ID/update-pending"
+    as_owner mkdir -p "$home/.local/state/$UPDATE_ID"
+    as_owner touch "$home/.local/state/$UPDATE_ID/update-pending"
     log "$TITLE will finish updating at your next login"
 fi

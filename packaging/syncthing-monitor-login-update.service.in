@@ -1,0 +1,12 @@
+[Unit]
+Description=Update Syncthing Monitor from its git checkout at login
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+Environment="SYNCTHING_MONITOR_SOURCE_DIR=@CHECKOUT@"
+Environment="SYNCTHING_MONITOR_INSTALL_SUPPORT=@INSTALL_SUPPORT@"
+ExecStart=@INSTALLER@ --login-update
+
+[Install]
+WantedBy=graphical-session.target

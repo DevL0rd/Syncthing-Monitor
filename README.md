@@ -54,7 +54,7 @@ The installer adds the widget and restarts Plasma. Open **Add Widgets**, drop **
 <table>
   <tr>
     <td>🔄 <b>Update</b></td>
-    <td>On Arch-based systems Syncthing Monitor updates itself with every system update and lets you know when it did. Anywhere else, run <code>git pull &amp;&amp; ./install.sh</code>.</td>
+    <td>Syncthing Monitor updates itself with every system update and lets you know when it did. On Fedora Atomic desktops and SteamOS that happens at your next login. You can also run <code>git pull &amp;&amp; ./install.sh</code> any time.</td>
   </tr>
   <tr>
     <td>📦 <b>From a package</b></td>
@@ -67,6 +67,14 @@ The installer adds the widget and restarts Plasma. Open **Add Widgets**, drop **
   <tr>
     <td>🖥️ <b>Needs</b></td>
     <td>KDE Plasma 6 and Syncthing running as your user. A remote or custom Syncthing works too, from the widget's settings.</td>
+  </tr>
+  <tr>
+    <td>🐧 <b>Distros</b></td>
+    <td>The installer sets everything up on Arch and Arch-based systems like CachyOS, Fedora, openSUSE Tumbleweed and Debian testing, plus Fedora Atomic desktops like Kinoite, Aurora and Bazzite and SteamOS in Desktop Mode.</td>
+  </tr>
+  <tr>
+    <td>🧊 <b>Atomic desktops</b></td>
+    <td>On Fedora Atomic desktops and SteamOS everything goes into your home folder, so the read-only system stays untouched. Their Plasma already has what the widget needs.</td>
   </tr>
 </table>
 
