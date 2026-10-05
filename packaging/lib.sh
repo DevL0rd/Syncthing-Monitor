@@ -156,7 +156,7 @@ register_system_updates() {
     prepare_update_source "$checkout"
     update_as_root install -Dm755 "$checkout/packaging/system-update" "$UPDATE_LIB_DIR/system-update"
     install_update_hook "$checkout" "$manager"
-    printf '%s\n%s\n' "$UPDATE_SOURCE_COPY" "$(id -un)" | update_as_root install -Dm644 /dev/stdin "$UPDATE_STATE_DIR/source"
+    printf '%s\n%s\n%s\n' "$UPDATE_SOURCE_COPY" "$(id -un)" "$installer" | update_as_root install -Dm644 /dev/stdin "$UPDATE_STATE_DIR/source"
     enable_update_unit "$checkout" "$installer" "$UPDATE_UNIT"
 }
 
