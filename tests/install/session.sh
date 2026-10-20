@@ -8,7 +8,7 @@ for _ in $(seq 60); do
     sleep 0.5
 done
 systemctl --user set-environment QT_QPA_PLATFORM=wayland
-systemctl --user start plasma-plasmashell.service
+systemctl --user start plasma-plasmashell.service || { journalctl --user -u plasma-plasmashell --no-pager | tail -60; journalctl --user -u headless-kwin --no-pager | tail -20; exit 1; }
 sleep 20
 systemctl --user restart plasma-plasmashell.service
 sleep 15
