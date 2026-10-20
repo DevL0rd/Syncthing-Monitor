@@ -38,7 +38,6 @@ step() {
 
 step "Starting an Arch Linux system with Plasma"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-sudo apt-get install -y -q linux-modules-extra-$(uname -r) 2>&1 | tail -3; sudo modprobe vgem 2>&1; sudo modprobe vkms 2>&1; ls -l /dev/dri
 docker run -d --name "$CONTAINER" --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock "$IMAGE" /usr/lib/systemd/systemd >/dev/null
 trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
 as_root pacman -Syu --noconfirm --needed plasma-desktop sudo git
