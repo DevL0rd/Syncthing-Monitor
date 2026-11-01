@@ -19,12 +19,22 @@ check "the widget is installed" "kpackagetool6 -t Plasma/Applet -l | grep -qx or
 check "the shared components were copied into the widget" "test -f ~/.local/share/plasma/plasmoids/org.devl0rd.syncthingmonitor/contents/ui/lib/PopupShell.qml"
 check "Plasma can read local configuration" "systemctl --user show plasma-plasmashell.service -p Environment | grep -q QML_XHR_ALLOW_FILE_READ=1"
 check "the system update hook is registered" "test -f /usr/share/libalpm/hooks/syncthing-monitor-update.hook && test -x /usr/lib/syncthing-monitor/system-update && test -f /usr/lib/syncthing-monitor/lib.sh"
-check "the system update hook only targets the packages the widget depends on" "! grep -q '^Target = \\*' /usr/share/libalpm/hooks/syncthing-monitor-update.hook && diff <(grep '^Target = ' /usr/share/libalpm/hooks/syncthing-monitor-update.hook | sed 's/^Target = //' | sort) <(source /usr/lib/syncthing-monitor/lib.sh; printf '%s\\n' \${UPDATE_DEPENDENCIES[pacman]} | sort)"
+check "the system update hook only targets the packages the widget depends on" hook_targets_match
 check "the dependency fingerprint was stored" "test -s /var/lib/syncthing-monitor/dependencies"
 check "the system update does nothing when nothing changed" "sudo bash -c 'source /usr/lib/syncthing-monitor/lib.sh; [[ \$(cat /var/lib/syncthing-monitor/dependencies) == \$(dependency_fingerprint pacman) ]]' && out=\$(sudo /usr/lib/syncthing-monitor/system-update 2>&1) && [[ -z \$out ]]"
 check "the installer is staged for updates" "test -x ~/.local/share/syncthing-monitor/installer/install.sh && test -f ~/.local/share/syncthing-monitor/installer/packaging/lib.sh"
 check "the update finisher is enabled" "systemctl --user is-enabled syncthing-monitor-update.service"
 check "Plasma runs" "systemctl --user is-active plasma-plasmashell.service"
+
+hook_targets_match() {
+    local hook=/usr/share/libalpm/hooks/syncthing-monitor-update.hook targets expected
+    targets=$(sed -n 's/^Target = //p' "$hook" | sort) || return 1
+    expected=$(source /usr/lib/syncthing-monitor/lib.sh && printf '%s\n' ${UPDATE_DEPENDENCIES[pacman]} | sort) || return 1
+    if [[ -z $targets || $targets != "$expected" ]]; then
+        printf 'hook targets:\n%s\nexpected:\n%s\n' "$targets" "$expected" >&2
+        return 1
+    fi
+}
 
 self_removal() {
     local backup src rc hook=/usr/share/libalpm/hooks/syncthing-monitor-update.hook
