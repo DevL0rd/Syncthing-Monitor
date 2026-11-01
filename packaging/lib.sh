@@ -18,6 +18,14 @@ declare -A UPDATE_HOOKS=(
     [apt-get]="$UPDATE_ID-update.apt /etc/apt/apt.conf.d/99$UPDATE_ID-update 644"
 )
 
+declare -A UPDATE_DEPENDENCIES=(
+    [pacman]="kpackage knotifications qt6-declarative glib2"
+    [dnf]="kf6-kpackage kf6-knotifications qt6-qtdeclarative glib2"
+    [zypper]="kf6-kpackage kf6-knotifications-imports qt6-declarative-imports glib2-tools"
+    [apt-get]="kpackagetool6 qml6-module-org-kde-notifications qml6-module-qt-labs-folderlistmodel qml6-module-qtquick-shapes qml6-module-qtcore libglib2.0-bin"
+)
+UPDATE_DEPENDENCIES_FILE="$UPDATE_STATE_DIR/dependencies"
+
 ATOMIC_SYSTEM=false
 STEAMOS=false
 if [[ $(. /etc/os-release 2>/dev/null && printf '%s' "${ID:-}") == steamos ]]; then
@@ -53,6 +61,18 @@ package_owns() {
     apt-get) dpkg -S "$1" >/dev/null 2>&1 ;;
     *) return 0 ;;
     esac
+}
+
+dependency_fingerprint() {
+    local manager="$1" packages
+    read -ra packages <<<"${UPDATE_DEPENDENCIES[$manager]}"
+    {
+        case $manager in
+        pacman) pacman -Q "${packages[@]}" 2>&1 ;;
+        dnf | zypper) rpm -q --qf '%{NAME} %{VERSION}-%{RELEASE}\n' "${packages[@]}" 2>&1 ;;
+        apt-get) dpkg-query -W -f '${Package} ${Version}\n' "${packages[@]}" 2>&1 ;;
+        esac
+    } | LC_ALL=C sort | sha256sum | cut -d' ' -f1
 }
 
 remove_empty_directory() {
@@ -157,12 +177,13 @@ register_system_updates() {
     update_as_root install -Dm755 "$checkout/packaging/system-update" "$UPDATE_LIB_DIR/system-update"
     install_update_hook "$checkout" "$manager"
     printf '%s\n%s\n%s\n' "$UPDATE_SOURCE_COPY" "$(id -un)" "$installer" | update_as_root install -Dm644 /dev/stdin "$UPDATE_STATE_DIR/source"
+    dependency_fingerprint "$manager" | update_as_root install -Dm644 /dev/stdin "$UPDATE_DEPENDENCIES_FILE"
     update_as_root rm -f "$UPDATE_STATE_DIR/update-failed"
     enable_update_unit "$checkout" "$installer" "$UPDATE_UNIT"
 }
 
-unregister_system_updates() {
-    local entry source target mode reload=false
+remove_system_update_files() {
+    local entry source target mode
     for entry in "${UPDATE_HOOKS[@]}" "- $UPDATE_LEGACY_HOOK -"; do
         read -r source target mode <<<"$entry"
         if [[ -e $target ]]; then
@@ -173,6 +194,11 @@ unregister_system_updates() {
     if [[ -e $UPDATE_STATE_DIR || -e $UPDATE_LIB_DIR ]]; then
         update_as_root rm -rf "$UPDATE_STATE_DIR" "$UPDATE_LIB_DIR"
     fi
+}
+
+unregister_system_updates() {
+    local reload=false
+    remove_system_update_files
     disable_update_unit "$UPDATE_UNIT" && reload=true
     disable_update_unit "$UPDATE_LOGIN_UNIT" && reload=true
     if $reload; then

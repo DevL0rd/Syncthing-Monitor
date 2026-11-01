@@ -3,10 +3,10 @@ set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-ARCH_PACKAGES=(kpackage knotifications qt6-declarative glib2 git)
-FEDORA_PACKAGES=(kf6-kpackage kf6-knotifications qt6-qtdeclarative glib2 git libdnf5-plugin-actions)
-SUSE_PACKAGES=(kf6-kpackage kf6-knotifications-imports qt6-declarative-imports glib2-tools git)
-DEBIAN_PACKAGES=(kpackagetool6 qml6-module-org-kde-notifications qml6-module-qt-labs-folderlistmodel qml6-module-qtquick-shapes qml6-module-qtcore libglib2.0-bin git)
+read -ra ARCH_PACKAGES <<<"${UPDATE_DEPENDENCIES[pacman]} git"
+read -ra FEDORA_PACKAGES <<<"${UPDATE_DEPENDENCIES[dnf]} git libdnf5-plugin-actions"
+read -ra SUSE_PACKAGES <<<"${UPDATE_DEPENDENCIES[zypper]} git"
+read -ra DEBIAN_PACKAGES <<<"${UPDATE_DEPENDENCIES[apt-get]} git"
 declare -A IMAGE_COMMANDS=(
     [kpackagetool6]="kf6-kpackage kpackage"
 )

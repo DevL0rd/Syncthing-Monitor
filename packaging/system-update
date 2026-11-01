@@ -46,51 +46,64 @@ git_owner() {
     as_owner git -C "$checkout" "$@"
 }
 
-if [[ ! -d $checkout ]] || ! git_owner rev-parse --git-dir >/dev/null 2>&1; then
-    log "checkout $checkout is gone or not a git repository, skipping"
+if [[ ! -d $checkout ]]; then
+    if [[ -d $home ]]; then
+        log "checkout $checkout is gone, removing the system updater"
+        remove_system_update_files
+    else
+        log "checkout $checkout is gone but $home is missing, skipping"
+    fi
     exit 0
 fi
-git_owner rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1 || exit 0
-if ! git_owner fetch --quiet; then
-    log "could not fetch updates for $checkout, skipping"
+if ! git_owner rev-parse --git-dir >/dev/null 2>&1; then
+    log "checkout $checkout is not a git repository, skipping"
     exit 0
 fi
-[[ $(git_owner rev-list --count 'HEAD..@{upstream}') -gt 0 ]] || exit 0
-if [[ -n $(git_owner status --porcelain --untracked-files=no) ]]; then
-    log "$checkout has local changes, skipping the update"
-    exit 0
+pulled=false
+if git_owner rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+    if ! git_owner fetch --quiet; then
+        log "could not fetch updates for $checkout, checking only the packages it depends on"
+    elif [[ $(git_owner rev-list --count 'HEAD..@{upstream}') -gt 0 ]]; then
+        if [[ -n $(git_owner status --porcelain --untracked-files=no) ]]; then
+            log "$checkout has local changes, skipping the pull"
+        elif [[ $(git_owner rev-list --count '@{upstream}..HEAD') -gt 0 ]]; then
+            log "$checkout has local commits that aren't upstream, skipping the pull"
+        elif git_owner merge --ff-only --quiet '@{upstream}'; then
+            git_owner submodule update --init --recursive --quiet
+            pulled=true
+            log "updated to $(git_owner rev-parse --short HEAD)"
+        fi
+    fi
 fi
-if [[ $(git_owner rev-list --count '@{upstream}..HEAD') -gt 0 ]]; then
-    log "$checkout has local commits that aren't upstream, skipping the update"
-    exit 0
-fi
-git_owner merge --ff-only --quiet '@{upstream}' || exit 0
-git_owner submodule update --init --recursive --quiet
-log "updated to $(git_owner rev-parse --short HEAD)"
 
-inputs=$(git_owner rev-parse HEAD)
+manager=$(package_manager) || exit 0
+fingerprint=$(dependency_fingerprint "$manager")
+if ! $pulled && [[ $(cat "$UPDATE_DEPENDENCIES_FILE" 2>/dev/null) == "$fingerprint" ]]; then
+    exit 0
+fi
+
+inputs="$(git_owner rev-parse HEAD) $fingerprint"
 if [[ $(cat "$failed_file" 2>/dev/null) == "$inputs" ]]; then
     log "last update failed for these inputs, skipping; run ./install.sh to retry"
     exit 0
 fi
 install -Dm755 "$checkout/packaging/system-update" "$UPDATE_LIB_DIR/system-update"
-if manager=$(package_manager); then
-    install_update_hook "$checkout" "$manager"
-fi
-status=0
+install_update_hook "$checkout" "$manager"
 if [[ -z $installer || ! -x $installer/install.sh ]]; then
     log "$installer/install.sh is missing, run ./install.sh again to finish updating $TITLE"
-elif [[ -S /run/user/$uid/bus ]]; then
-    as_owner env SYNCTHING_MONITOR_SOURCE_DIR="$checkout" SYNCTHING_MONITOR_INSTALL_SUPPORT="$installer/packaging" \
-        "$installer/install.sh" --system-update || status=1
-else
+    exit 0
+fi
+if [[ ! -S /run/user/$uid/bus ]]; then
     as_owner mkdir -p "$home/.local/state/$UPDATE_ID"
     as_owner touch "$home/.local/state/$UPDATE_ID/update-pending"
     log "$TITLE will finish updating at your next login"
+    exit 0
 fi
-if [[ $status -ne 0 ]]; then
+if as_owner env SYNCTHING_MONITOR_SOURCE_DIR="$checkout" SYNCTHING_MONITOR_INSTALL_SUPPORT="$installer/packaging" \
+    "$installer/install.sh" --system-update; then
+    rm -f "$failed_file"
+    printf '%s\n' "$fingerprint" >"$UPDATE_DEPENDENCIES_FILE"
+else
     printf '%s\n' "$inputs" >"$failed_file"
     log "the update failed, it will not be retried until the source changes"
-else
-    rm -f "$failed_file"
 fi

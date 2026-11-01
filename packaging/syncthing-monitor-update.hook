@@ -1,7 +1,11 @@
 [Trigger]
+Operation = Install
 Operation = Upgrade
 Type = Package
-Target = *
+Target = kpackage
+Target = knotifications
+Target = qt6-declarative
+Target = glib2
 
 [Action]
 Description = Updating Syncthing Monitor...
