@@ -3,10 +3,12 @@ set -uo pipefail
 
 failed=0
 check() {
-    if eval "$2" >/dev/null 2>&1; then
+    local output
+    if output=$(eval "$2" 2>&1); then
         echo "ok: $1"
     else
         echo "FAILED: $1"
+        [[ -z $output ]] || printf '%s\n' "$output"
         failed=1
     fi
 }
